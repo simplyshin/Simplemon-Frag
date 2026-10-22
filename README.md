@@ -46,11 +46,27 @@ Web 后台：浏览器打开 `http://localhost:3210` 即可（本机 `/api` 免 
 
 ### Trae / Claude 等支持 HTTP 的客户端
 
-MCP 配置中添加 Streamable HTTP 端点：
+MCP 配置中添加 Streamable HTTP 端点（URL + Header 方式）：
 
 ```
 URL:  http://localhost:3210/mcp
 Header: Authorization: Bearer <你的 AUTH_TOKEN>
+```
+
+若客户端配置为 JSON 格式，参考如下写法（远程部署时把 `127.0.0.1` 换成服务器 IP 或域名）：
+
+```json
+{
+  "mcpServers": {
+    "frag-mcp": {
+      "type": "http",
+      "url": "http://127.0.0.1:3210/mcp",
+      "headers": {
+        "Authorization": "Bearer <你的 AUTH_TOKEN>"
+      }
+    }
+  }
+}
 ```
 
 ### Codex 等只支持 stdio 的客户端

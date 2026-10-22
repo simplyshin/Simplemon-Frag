@@ -16,3 +16,6 @@ local_cache/
 *.log
 .DS_Store
 Thumbs.db
+
+# Trae IDE 工作区文档
+.trae/
