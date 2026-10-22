@@ -1,0 +1,18 @@
+# 依赖与构建产物
+node_modules/
+dist/
+
+# 运行时数据（数据库/上传文件/本地配置）
+data/
+
+# 本地模型缓存（体积过大，首次运行时自动下载）
+local_cache/
+
+# 环境变量与敏感信息
+.env
+.env.local
+
+# 日志与系统文件
+*.log
+.DS_Store
+Thumbs.db
