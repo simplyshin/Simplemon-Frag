@@ -3,7 +3,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import type { FastifyInstance } from 'fastify';
 import { registerAllTools } from './tools/index.js';
 
-const SERVER_INFO = { name: 'doc-mcp-server', version: '0.1.0' } as const;
+const SERVER_INFO = { name: 'frag-mcp-server', version: '0.1.0' } as const;
 
 /** 创建 MCP Server 实例并注册全部 tools（无状态模式下每请求新建） */
 export function createMcpServer(): McpServer {

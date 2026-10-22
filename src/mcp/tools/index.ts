@@ -25,7 +25,7 @@ export function registerAllTools(mcp: McpServer): void {
     content: [{
       type: 'text',
       text: JSON.stringify({
-        service: 'doc-mcp-server',
+        service: 'frag-mcp-server',
         version: '0.1.0',
         llm_configured: !!getLlm(),
         capabilities: [

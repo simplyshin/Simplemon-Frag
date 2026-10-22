@@ -79,7 +79,7 @@ const call = await post({
   params: { name: 'server_info', arguments: {} },
 });
 const callText = call.json?.result?.content?.[0]?.text;
-check('tools/call server_info 返回服务信息', !!callText && callText.includes('doc-mcp-server'),
+check('tools/call server_info 返回服务信息', !!callText && callText.includes('frag-mcp-server'),
   callText?.slice(0, 80) ?? call.text.slice(0, 200));
 
 // 5. GET /mcp 无状态模式应拒绝 SSE 流（405）

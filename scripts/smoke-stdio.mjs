@@ -59,7 +59,7 @@ try {
 
   send({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'server_info', arguments: {} } });
   const call = await waitFor((m) => m.id === 3);
-  check('stdio tools/call 正常', call.result?.content?.[0]?.text?.includes('doc-mcp-server'));
+  check('stdio tools/call 正常', call.result?.content?.[0]?.text?.includes('frag-mcp-server'));
 
   // stdio 下无鉴权（本地子进程可信），直接可调用业务 tool
   send({ jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'list_projects', arguments: {} } });

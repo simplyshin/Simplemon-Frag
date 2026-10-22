@@ -1,8 +1,8 @@
-# doc-mcp 改进计划：stdio 内嵌 Web 后台 + 文档导出下载 + 体验优化
+# frag-mcp 改进计划：stdio 内嵌 Web 后台 + 文档导出下载 + 体验优化
 
 ## Context（背景）
 
-用户当前以 stdio 模式将 doc-mcp 接入 Trae 使用，暴露出以下问题：
+用户当前以 stdio 模式将 frag-mcp 接入 Trae 使用，暴露出以下问题：
 
 1. **stdio 模式下 Web 后台完全不可用**：`src/server.ts` L20-25 中 stdio 分支只创建 MCP 连接，不启动任何 HTTP 服务，用户无法通过浏览器管理文档/项目/设置。且此前 HTTP + stdio 双进程并存曾引发 SQLITE_BUSY，因此不能简单建议"另开一个 HTTP 进程"。
 2. **大文档无导出/下载途径**：读取大文档（如刚生成的 66KB 协议文档）只能由 AI 客户端 `get_document` 全量读入再转写，浪费大量 token 与时间；Web 后台也没有下载按钮。

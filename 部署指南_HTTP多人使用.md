@@ -1,6 +1,6 @@
-# doc-mcp 部署指南 — HTTP 集中部署（多人共享）
+# frag-mcp 部署指南 — HTTP 集中部署（多人共享）
 
-本文说明如何把 doc-mcp 以 **HTTP 方式集中部署在一台服务器**上，让团队多人通过各自的 AI 客户端（Trae / Claude / Cursor 等）远程接入同一个知识库，而不是每人本地跑一份 stdio 进程。
+本文说明如何把 frag-mcp 以 **HTTP 方式集中部署在一台服务器**上，让团队多人通过各自的 AI 客户端（Trae / Claude / Cursor 等）远程接入同一个知识库，而不是每人本地跑一份 stdio 进程。
 
 ## 一、两种接入方式对比
 
@@ -15,7 +15,7 @@
 
 ```
                      ┌──────────────────────────────┐
- Trae (同事A) ──HTTP──▶│  doc-mcp 服务（服务器/主机）    │
+ Trae (同事A) ──HTTP──▶│  frag-mcp 服务（服务器/主机）    │
  Claude (同事B) ─HTTP─▶│  :3210                       │
  Cursor (同事C) ─HTTP─▶│  ├─ /mcp   (MCP 协议端点)      │
                      │  ├─ /api   (REST, Web后台用)   │
@@ -55,18 +55,18 @@ node dist/server.js
 
 # 7. 验证
 curl http://localhost:3210/health
-# 期望返回 {"status":"ok","service":"doc-mcp-server","version":"0.1.0"}
+# 期望返回 {"status":"ok","service":"frag-mcp-server","version":"0.1.0"}
 ```
 
 ### 进程守护（长期运行必须）
 
 服务进程不能挂在终端会话上，选一种：
 
-**Linux — systemd 示例**（`/etc/systemd/system/doc-mcp.service`）：
+**Linux — systemd 示例**（`/etc/systemd/system/frag-mcp.service`）：
 
 ```ini
 [Unit]
-Description=doc-mcp server
+Description=frag-mcp server
 After=network.target
 
 [Service]
@@ -83,17 +83,17 @@ WantedBy=multi-user.target
 
 ```bash
 sudo systemctl daemon-reload
-sudo systemctl enable --now doc-mcp
-sudo systemctl status doc-mcp      # 查看状态
-journalctl -u doc-mcp -f           # 查看日志
+sudo systemctl enable --now frag-mcp
+sudo systemctl status frag-mcp      # 查看状态
+journalctl -u frag-mcp -f           # 查看日志
 ```
 
 **Windows — NSSM 示例**：
 
 ```powershell
-nssm install doc-mcp "C:\Program Files\nodejs\node.exe" "D:\path\to\rag\dist\server.js"
-nssm set doc-mcp AppDirectory D:\path\to\rag
-nssm start doc-mcp
+nssm install frag-mcp "C:\Program Files\nodejs\node.exe" "D:\path\to\rag\dist\server.js"
+nssm set frag-mcp AppDirectory D:\path\to\rag
+nssm start frag-mcp
 ```
 
 ## 三、开放网络访问
@@ -104,7 +104,7 @@ nssm start doc-mcp
 
 ```powershell
 # Windows 防火墙
-netsh advfirewall firewall add rule name="doc-mcp" dir=in action=allow protocol=TCP localport=3210
+netsh advfirewall firewall add rule name="frag-mcp" dir=in action=allow protocol=TCP localport=3210
 ```
 
 ```bash
@@ -155,7 +155,7 @@ MCP 配置中添加（以 Trae 为例）：
 ```json
 {
   "mcpServers": {
-    "doc-mcp": {
+    "frag-mcp": {
       "url": "http://192.168.1.100:3210/mcp",
       "headers": {
         "Authorization": "Bearer <你的AUTH_TOKEN>"
@@ -211,7 +211,7 @@ Web 后台（`http://服务器IP:3210`）的**静态页面所有人可打开**�
 | 现象 | 原因与处理 |
 |---|---|
 | 客户端报 401 Unauthorized | token 不对或没带 `Bearer ` 前缀；核对 `.env` 的 `AUTH_TOKEN` 与客户端 headers 是否一致 |
-| 客户端连接超时 / 拒绝 | 服务未启动或防火墙未放行；先 `curl /health` 排查网络，再查 `systemctl status doc-mcp` |
+| 客户端连接超时 / 拒绝 | 服务未启动或防火墙未放行；先 `curl /health` 排查网络，再查 `systemctl status frag-mcp` |
 | 启动报「缺少鉴权 token」 | `.env` 未配置 `AUTH_TOKEN`，或文件不在项目根目录 |
 | 端口被占用 | 换端口：`.env` 改 `PORT`，或杀掉占用进程后重启 |
 | `SQLITE_BUSY` | 有第二个进程在写同一 `data/doc.db`（常见于 stdio 调试进程未关）；确保只有服务器一个进程使用该数据目录 |

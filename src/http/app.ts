@@ -50,7 +50,7 @@ export async function createHttpApp(
 
   app.get('/health', async () => ({
     status: 'ok',
-    service: 'doc-mcp-server',
+    service: 'frag-mcp-server',
     version: '0.1.0',
   }));
 

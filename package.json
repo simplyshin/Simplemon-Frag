@@ -1,5 +1,5 @@
 {
-  "name": "doc-mcp-server",
+  "name": "frag-mcp-server",
   "version": "0.1.0",
   "description": "项目文档管理 MCP 服务 — 自托管项目知识库（文档检索/更新/归档）",
   "type": "module",

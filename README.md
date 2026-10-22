@@ -1,4 +1,4 @@
-# doc-mcp — 项目文档管理 MCP 服务
+# frag-mcp — 项目文档管理 MCP 服务
 
 一个自托管的**项目文档管理 + RAG 语义检索** MCP 服务。让 AI 客户端（Trae、Codex、Claude 等）直接管理你的项目文档：增删改查、版本追溯、语义检索、自动关联、生成聚合文档、归档客户沟通记录；同时提供 Web 后台供人工管理。数据全部存在本机 SQLite，不外泄。
 
@@ -58,7 +58,7 @@ Header: Authorization: Bearer <你的 AUTH_TOKEN>
 ```json
 {
   "mcpServers": {
-    "doc-mcp": {
+    "frag-mcp": {
       "command": "node",
       "args": ["D:/WorkSpace/trea/MCP/rag/dist/server.js", "--stdio", "--web"]
     }

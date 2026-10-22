@@ -22,8 +22,8 @@ const menuItems = [
   <el-container class="app-shell">
     <el-aside :width="collapsed ? '64px' : '220px'" class="app-aside">
       <div class="app-logo" :class="{ 'logo-mini': collapsed }">
-        <template v-if="!collapsed">doc-mcp 后台</template>
-        <template v-else>DM</template>
+        <template v-if="!collapsed">frag-mcp 后台</template>
+        <template v-else>FM</template>
       </div>
       <el-menu
         :default-active="activeMenu" router class="app-menu"
