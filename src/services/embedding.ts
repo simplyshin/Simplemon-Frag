@@ -74,8 +74,10 @@ export async function embedPendingChunks(
     const batch = remaining.splice(0, 32);
     try {
       const vectors = await embedder.embedPassages(batch.map((r) => r.content));
-      // vec0 的 PK 列要求 INTEGER：better-sqlite3 默认把 JS number 绑成 REAL，必须用 BigInt
-      const insert = db.prepare('INSERT INTO chunks_vec (chunk_id, embedding) VALUES (?, ?)');
+      // vec0 的 PK 列要求 INTEGER：better-sqlite3 默认把 JS number 绑成 REAL，必须用 BigInt。
+      // OR IGNORE：内联补算与 retry loop 并发选中同一 chunk 时静默去重（同一模型先到先得，
+      // 避免主键冲突导致整批 32 块误判失败）
+      const insert = db.prepare('INSERT OR IGNORE INTO chunks_vec (chunk_id, embedding) VALUES (?, ?)');
       const insertAll = db.transaction(() => {
         for (let i = 0; i < batch.length; i++) {
           insert.run(BigInt(batch[i].id), JSON.stringify(vectors[i]));

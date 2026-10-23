@@ -11,7 +11,8 @@ export function registerIndexTools(mcp: McpServer): void {
     title: '重建项目文档索引',
     description:
       '为项目生成/更新《项目文档索引》文档：包含全部文档目录与内容摘要。' +
-      '批量更新文档后调用可刷新索引。每次重建都追加新版本，历史索引可回溯。',
+      '批量更新文档后调用可刷新索引（写操作后通常已自动重建，本工具用于手动强制刷新）。' +
+      '每次重建都追加新版本，内容无变化时跳过建版（action=skipped），历史索引可回溯。',
     inputSchema: {
       project_id: z.string().min(1).describe('项目 id 或项目名称（名称支持模糊）'),
     },

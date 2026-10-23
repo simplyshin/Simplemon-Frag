@@ -203,7 +203,14 @@ export function addDocument(
 
 export function updateDocument(
   db: Db,
-  input: { documentId: string; content: string; changeNote?: string; createdBy?: string },
+  input: {
+    documentId: string;
+    content: string;
+    changeNote?: string;
+    createdBy?: string;
+    /** 可选：整体替换 documents.metadata（索引自动重建用它落新鲜度指纹） */
+    metadata?: Record<string, unknown>;
+  },
 ): { document_id: string; version_no: number; chunk_count: number; vectors_reused: number } {
   if (!input.content?.trim()) throw new Error('content 不能为空');
 
@@ -261,6 +268,11 @@ export function updateDocument(
 
     db.prepare('UPDATE documents SET latest_version_id = ?, updated_at = ?, content_hash = ? WHERE id = ?')
       .run(versionId, ts, hashContent(input.content), doc.id);
+    // metadata 仅在显式传入时整体替换，避免破坏 P5 沟通元数据等既有内容
+    if (input.metadata) {
+      db.prepare('UPDATE documents SET metadata = ? WHERE id = ?')
+        .run(JSON.stringify(input.metadata), doc.id);
+    }
     return drafts.length;
   })();
 

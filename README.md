@@ -148,6 +148,7 @@ Web 后台（同端口 3210），浏览器可直接管理文档——与 MCP 同
 |---|---|---|
 | `AUTH_TOKEN` | `.env`（必须） | MCP/REST 鉴权 token；本机 Web 后台与 `/api` 免 token |
 | `PORT` | `.env` | 服务端口，默认 3210 |
+| `AUTO_REBUILD_INDEX` | `.env` / `data/config.json` | 文档写入（Web 上传/编辑/删除与 MCP 增删改）后自动重建《项目文档索引》，默认开启；多实例部署设为 `off` |
 | LLM Provider | Web 设置页 / `data/config.json` | openai / anthropic / deepseek / zhipu 预置；key 放 `.env` 对应变量名；**不配置也能用**（生成降级为机械聚合） |
 | Embedding | Web 设置页 / `data/config.json` | 默认 `local`（bge-small-zh-v1.5，512 维，零 key）；可切 `openai-compatible`；切换模型自动重建向量表 |
 | 分块 | `data/config.json` | maxTokens=800 / overlap=100 |

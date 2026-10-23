@@ -12,6 +12,7 @@ import {
 } from '../../services/document.js';
 import { listLinks, projectGraph, rebuildProjectLinks } from '../../services/links.js';
 import { embedAfterWrite } from '../../services/embedding.js';
+import { scheduleRebuild } from '../../services/indexing.js';
 
 /** REST：文档 CRUD + multipart 上传 + 版本历史（P3 Web 后台） */
 export function registerDocumentRoutes(app: FastifyInstance): void {
@@ -54,7 +55,9 @@ export function registerDocumentRoutes(app: FastifyInstance): void {
         ? `项目内已存在内容完全相同的文档（已照常入库，可考虑删除其一）：`
           + r.duplicates.map((d) => `「${d.title}」(${d.id})`).join('、')
         : undefined;
-      return { ...r, embedding, duplicate_warning };
+      // 自动索引重建：去抖 5s 后台执行，不阻塞本次响应
+      scheduleRebuild(getDb(), id);
+      return { ...r, embedding, duplicate_warning, index_rebuild: 'scheduled' };
     } catch (err) {
       return reply.code(400).send({ error: (err as Error).message });
     }
@@ -128,7 +131,8 @@ export function registerDocumentRoutes(app: FastifyInstance): void {
         createdBy: 'web',
       });
       const embedding = await embedAfterWrite(getDb(), id);
-      return { ...r, embedding };
+      scheduleRebuild(getDb(), id);
+      return { ...r, embedding, index_rebuild: 'scheduled' };
     } catch (err) {
       return reply.code(400).send({ error: (err as Error).message });
     }
@@ -137,7 +141,9 @@ export function registerDocumentRoutes(app: FastifyInstance): void {
   app.delete('/api/documents/:id', async (request, reply) => {
     const { id } = request.params as { id: string };
     try {
-      return deleteDocument(getDb(), id);
+      const r = deleteDocument(getDb(), id);
+      scheduleRebuild(getDb(), id); // 软删除后重建，索引中该节自动消失
+      return { ...r, index_rebuild: 'scheduled' };
     } catch (err) {
       return reply.code(404).send({ error: (err as Error).message });
     }

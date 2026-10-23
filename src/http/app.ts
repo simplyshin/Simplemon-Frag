@@ -6,6 +6,7 @@ import multipart from '@fastify/multipart';
 import { PROJECT_ROOT, type AppConfig } from '../config/index.js';
 import { getDb } from '../db/index.js';
 import { startPendingRetryLoop } from '../services/embedding.js';
+import { flushPendingRebuilds, scheduleStartupRebuilds } from '../services/indexing.js';
 import { registerMcpRoutes } from '../mcp/server.js';
 import { registerApiRoutes } from '../api/routes/index.js';
 
@@ -74,14 +75,28 @@ export async function createHttpApp(
   return app;
 }
 
-/** 创建并监听端口，启动待向量化补算循环；失败时退出进程（独立 HTTP 模式）或抛出（stdio 内嵌模式） */
+/** 创建并监听端口，启动后台任务（待向量化补算循环 / 索引启动自愈 / 优雅关闭清空） */
 export async function startHttpApp(
   config: AppConfig,
   options: HttpAppOptions = {},
 ): Promise<FastifyInstance> {
   const app = await createHttpApp(config, options);
+  // 优雅关闭：onClose 同步补齐静默期内未落盘的索引重建
+  // （必须在 listen 之前注册——Fastify 禁止监听后 addHook）
+  app.addHook('onClose', async () => {
+    flushPendingRebuilds(getDb());
+  });
   await app.listen({ port: config.server.port, host: '0.0.0.0' });
   // 定期补算失败遗留的待向量化 chunk（依赖注记：embedding 失败降级 + 待补算队列）
   startPendingRetryLoop(getDb());
+  // 索引启动自愈：逐项目指纹预检，仅疑似滞后项目错峰重建（覆盖崩溃丢失的脏标记）
+  scheduleStartupRebuilds(getDb());
+  // node 直启（server.ts）没有默认的信号→close 流程，这里补上：
+  // SIGINT/SIGTERM → app.close()（触发 onClose flush）→ 退出
+  for (const sig of ['SIGINT', 'SIGTERM'] as const) {
+    process.once(sig, () => {
+      void app.close().finally(() => process.exit(0));
+    });
+  }
   return app;
 }

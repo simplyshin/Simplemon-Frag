@@ -13,6 +13,7 @@ import {
   updateDocument,
 } from '../../services/document.js';
 import { exportDocument } from '../../services/export.js';
+import { scheduleRebuild } from '../../services/indexing.js';
 import { fail, handle, ok } from './shared.js';
 
 /**
@@ -63,6 +64,8 @@ export function registerDocumentTools(mcp: McpServer): void {
         ? `项目内已存在内容完全相同的文档（已照常入库，可考虑删除其一）：`
           + r.duplicates.map((d) => `「${d.title}」(${d.id})`).join('、')
         : undefined;
+      // 自动索引重建：不依赖 AI 主动调用 rebuild_index（实践验证不可靠）
+      scheduleRebuild(getDb(), project.id);
       return ok({ ...r, project: project.name, embedding, related, duplicate_warning });
     } catch (err) {
       return fail(err);
@@ -155,6 +158,7 @@ export function registerDocumentTools(mcp: McpServer): void {
       const embedding = await embedAfterWrite(getDb(), r.document_id);
       // P4 需求变更联动：返回自动关联文档，提醒 AI 检查是否需要同步更新
       const related = relatedHint(getDb(), r.document_id);
+      scheduleRebuild(getDb(), doc.project_id);
       return ok({ ...r, document_title: doc.title, embedding, related });
     } catch (err) {
       return fail(err);
@@ -170,6 +174,7 @@ export function registerDocumentTools(mcp: McpServer): void {
     },
   }, async ({ document_id, project_id }) => handle(() => {
     const doc = resolveDocument(getDb(), { documentId: document_id, projectId: project_id });
+    scheduleRebuild(getDb(), doc.project_id); // 软删除后重建，索引中该节自动消失
     return ok({ ...deleteDocument(getDb(), doc.id), document_title: doc.title });
   }));
 }

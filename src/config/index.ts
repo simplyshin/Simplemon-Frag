@@ -45,6 +45,12 @@ export interface ServerConfig {
    * 同进程共享 SQLite 连接，不会出现双进程 SQLITE_BUSY。
    */
   webInStdio: boolean;
+  /**
+   * 文档写入（REST + MCP 工具）成功后自动重建项目文档索引（去抖 5s 后台执行）。
+   * 默认 true；多实例横向扩展时应关闭（设 AUTO_REBUILD_INDEX=off 或配置文件置 false），
+   * 索引改由指定实例或运维脚本定期触发。手动 rebuild_index 不受影响。
+   */
+  autoRebuildIndex: boolean;
 }
 
 export interface AppConfig {
@@ -74,7 +80,7 @@ const DEFAULT_CONFIG: AppConfig = {
     apiKeyEnv: 'ZHIPU_API_KEY',
   },
   chunking: { maxTokens: 800, overlap: 100 },
-  server: { port: 3210, authToken: '', webInStdio: false },
+  server: { port: 3210, authToken: '', webInStdio: false, autoRebuildIndex: true },
 };
 
 // ---------- 工具函数 ----------
@@ -137,6 +143,9 @@ export function loadConfig(): AppConfig {
   // 环境变量覆盖
   if (process.env.PORT) merged.server.port = Number(process.env.PORT);
   if (process.env.AUTH_TOKEN) merged.server.authToken = process.env.AUTH_TOKEN;
+  if (process.env.AUTO_REBUILD_INDEX) {
+    merged.server.autoRebuildIndex = process.env.AUTO_REBUILD_INDEX !== 'off';
+  }
 
   if (!merged.server.authToken) {
     throw new Error('缺少鉴权 token：请在 .env 中设置 AUTH_TOKEN（参考 .env.example）');
