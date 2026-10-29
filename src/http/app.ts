@@ -1,4 +1,3 @@
-import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
 import fastifyStatic from '@fastify/static';
@@ -9,6 +8,7 @@ import { startPendingRetryLoop } from '../services/embedding.js';
 import { flushPendingRebuilds, scheduleStartupRebuilds } from '../services/indexing.js';
 import { registerMcpRoutes } from '../mcp/server.js';
 import { registerApiRoutes } from '../api/routes/index.js';
+import { ensureWebDistBuilt } from './web-build.js';
 
 /**
  * HTTP 应用（Web 后台 + REST + Streamable HTTP MCP）：
@@ -58,9 +58,10 @@ export async function createHttpApp(
   registerMcpRoutes(app);
   registerApiRoutes(app);
 
-  // 托管 Web 后台静态文件（web/dist 存在时启用；SPA fallback 由前端路由接管）
+  // 托管 Web 后台静态文件（web/dist 存在时启用，缺失时尝试自动构建；
+  // SPA fallback 由前端路由接管）
   const webDist = join(PROJECT_ROOT, 'web', 'dist');
-  if (existsSync(webDist)) {
+  if (await ensureWebDistBuilt((m) => app.log.info(m))) {
     await app.register(fastifyStatic, { root: webDist });
     app.setNotFoundHandler((request, reply) => {
       if (request.url.startsWith('/api') || request.url.startsWith('/mcp')) {
@@ -69,7 +70,7 @@ export async function createHttpApp(
       return reply.sendFile('index.html');
     });
   } else {
-    app.log.info('web/dist 不存在，跳过静态托管（cd web && npm run build 后自动启用）');
+    app.log.info('web/dist 不可用，跳过静态托管（cd web && npm run build 后重启自动启用）');
   }
 
   return app;
