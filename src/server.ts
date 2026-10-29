@@ -17,8 +17,15 @@ import { startPendingRetryLoop } from './services/embedding.js';
 if (process.argv.includes('--stdio')) {
   // stdio 模式：本地子进程天然可信，无需 token；
   // stdout 专用于 MCP 协议，任何日志都不得写入 stdout
-  process.env.AUTH_TOKEN ||= 'stdio-local';
-  const config = loadConfig();
+  // 注意：必须先 loadConfig 再兜底 token——loadDotEnv 不覆盖已存在的环境变量，
+  // 若提前 ||= 'stdio-local'，.env 的 AUTH_TOKEN 会被忽略导致内嵌 HTTP /mcp 永远 401
+  let config: ReturnType<typeof loadConfig>;
+  try {
+    config = loadConfig();
+  } catch {
+    process.env.AUTH_TOKEN ||= 'stdio-local'; // 纯 stdio 场景可完全无 token 配置
+    config = loadConfig();
+  }
   const mcp = createMcpServer();
   await mcp.connect(new StdioServerTransport());
 
