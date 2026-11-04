@@ -104,6 +104,30 @@ onMounted(() => {
     .then((r) => { related.value = r.related; })
     .catch(() => { /* 关联查询失败不打断页面 */ });
 });
+
+// 分类（手动修改）
+const DOC_TYPE_OPTIONS = [
+  { value: 'requirement', label: '需求' },
+  { value: 'contract', label: '合同' },
+  { value: 'adjustment', label: '调整记录' },
+  { value: 'tech', label: '技术说明' },
+  { value: 'test', label: '测试' },
+  { value: 'other', label: '其他' },
+] as const;
+const docTypeLabel = (t: string) => DOC_TYPE_OPTIONS.find((o) => o.value === t)?.label ?? t;
+const docTypeTag = (t: string): 'primary' | 'success' | 'info' | 'warning' | 'danger' =>
+  ({ requirement: 'primary', contract: 'warning', adjustment: 'danger', tech: 'success', test: 'info', other: 'info' } as const)[t as never] ?? 'info';
+
+async function changeDocType(docType: string) {
+  if (!doc.value || docType === doc.value.doc_type) return;
+  try {
+    await api('PATCH', `/api/documents/${docId}/doc-type`, { doc_type: docType });
+    doc.value.doc_type = docType;
+    ElMessage.success('分类已更新');
+  } catch (e) {
+    ElMessage.error((e as Error).message);
+  }
+}
 </script>
 
 <template>
@@ -114,6 +138,21 @@ onMounted(() => {
     >
       <template #title-extra>
         <el-tag size="small">v{{ viewingVersion ?? doc?.version_no }}</el-tag>
+        <el-dropdown v-if="doc && viewingVersion === null" trigger="click" @command="changeDocType">
+          <el-tag size="small" :type="docTypeTag(doc.doc_type)" style="cursor: pointer">
+            {{ docTypeLabel(doc.doc_type) }}
+          </el-tag>
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item
+                v-for="o in DOC_TYPE_OPTIONS"
+                :key="o.value"
+                :command="o.value"
+                :disabled="o.value === doc.doc_type"
+              >{{ o.label }}</el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
         <el-tag v-if="viewingVersion" size="small" type="warning">历史版本只读</el-tag>
       </template>
       <el-button v-if="!editing" @click="downloadDoc">下载 .md</el-button>

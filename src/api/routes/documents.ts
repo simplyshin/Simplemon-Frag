@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { getDb } from '../../db/index.js';
+import { isDocType, type DocType } from '../../services/doc-classify.js';
 import {
   addDocument,
   deleteDocument,
@@ -7,6 +8,7 @@ import {
   listDocuments,
   listVersions,
   parseDocumentBuffer,
+  setDocumentType,
   traceVersions,
   updateDocument,
 } from '../../services/document.js';
@@ -16,16 +18,35 @@ import { scheduleRebuild } from '../../services/indexing.js';
 
 /** REST：文档 CRUD + multipart 上传 + 版本历史（P3 Web 后台） */
 export function registerDocumentRoutes(app: FastifyInstance): void {
+  // 支持分类过滤 / 标题搜索 / 分页：?doc_type=&keyword=&page=&page_size=
   app.get('/api/projects/:id/documents', async (request, reply) => {
     const { id } = request.params as { id: string };
+    const q = request.query as { doc_type?: string; keyword?: string; page?: string; page_size?: string };
+    if (q.doc_type !== undefined && !isDocType(q.doc_type)) {
+      return reply.code(400).send({ error: `非法 doc_type: ${q.doc_type}（可选 requirement/contract/adjustment/tech/test/other）` });
+    }
+    const page = q.page !== undefined ? Number(q.page) : undefined;
+    const pageSize = q.page_size !== undefined ? Number(q.page_size) : undefined;
+    if (page !== undefined && (!Number.isInteger(page) || page < 1)) {
+      return reply.code(400).send({ error: 'page 必须为正整数' });
+    }
+    if (pageSize !== undefined && (!Number.isInteger(pageSize) || pageSize < 0)) {
+      return reply.code(400).send({ error: 'page_size 必须为非负整数（0 = 全量）' });
+    }
     try {
-      return listDocuments(getDb(), id);
+      const r = listDocuments(getDb(), id, {
+        docType: q.doc_type as DocType | undefined,
+        keyword: q.keyword,
+        page,
+        pageSize,
+      });
+      return { items: r.items, total: r.total, page: r.page, page_size: r.pageSize, counts: r.counts };
     } catch (err) {
       return reply.code(404).send({ error: (err as Error).message });
     }
   });
 
-  // multipart 上传：file（md/txt/docx/pdf）+ 可选 title / changeNote
+  // multipart 上传：file（md/txt/docx/pdf）+ 可选 title / changeNote / docType
   app.post('/api/projects/:id/documents', async (request, reply) => {
     const { id } = request.params as { id: string };
     try {
@@ -38,6 +59,10 @@ export function registerDocumentRoutes(app: FastifyInstance): void {
         || file.filename.replace(/\.[^.]+$/, '');
       const changeNote = (file.fields.changeNote as { value?: string } | undefined)?.value
         || `Web 上传 ${file.filename}`;
+      const docTypeField = (file.fields.docType as { value?: string } | undefined)?.value;
+      if (docTypeField !== undefined && !isDocType(docTypeField)) {
+        return reply.code(400).send({ error: `非法 docType: ${docTypeField}（可选 requirement/contract/adjustment/tech/test/other）` });
+      }
       const content = await parseDocumentBuffer(file.filename, buffer);
       if (!content?.trim()) {
         return reply.code(400).send({ error: `无法从 ${file.filename} 提取到文本内容` });
@@ -49,6 +74,7 @@ export function registerDocumentRoutes(app: FastifyInstance): void {
         changeNote,
         sourceType: 'web',
         createdBy: 'web',
+        docType: docTypeField as DocType | undefined,
       });
       const embedding = await embedAfterWrite(getDb(), r.document_id);
       const duplicate_warning = r.duplicates.length
@@ -112,6 +138,20 @@ export function registerDocumentRoutes(app: FastifyInstance): void {
       reply.type('text/markdown; charset=utf-8');
       reply.header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(safeName)}.md`);
       return doc.content;
+    } catch (err) {
+      return reply.code(404).send({ error: (err as Error).message });
+    }
+  });
+
+  // 手动修改文档分类（不追加版本、不参与索引）
+  app.patch('/api/documents/:id/doc-type', async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const body = (request.body ?? {}) as { doc_type?: string };
+    if (!isDocType(body.doc_type)) {
+      return reply.code(400).send({ error: `非法 doc_type: ${body.doc_type}（可选 requirement/contract/adjustment/tech/test/other）` });
+    }
+    try {
+      return setDocumentType(getDb(), id, body.doc_type);
     } catch (err) {
       return reply.code(404).send({ error: (err as Error).message });
     }

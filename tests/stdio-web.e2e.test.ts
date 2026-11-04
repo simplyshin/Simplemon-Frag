@@ -45,10 +45,10 @@ describe('stdio + 内嵌 Web 后台（--web）', () => {
       const projects = (await (await fetch(`${BASE}/api/projects`)).json()) as { id: string }[];
       expect(projects.length).toBeGreaterThan(0);
       const docs = (await (await fetch(`${BASE}/api/projects/${projects[0].id}/documents`)).json()) as
-        { id: string; title: string }[];
-      expect(docs.length).toBeGreaterThan(0);
+        { items: { id: string; title: string }[] };
+      expect(docs.items.length).toBeGreaterThan(0);
 
-      const res = await fetch(`${BASE}/api/documents/${docs[0].id}/export`);
+      const res = await fetch(`${BASE}/api/documents/${docs.items[0].id}/export`);
       expect(res.status).toBe(200);
       expect(res.headers.get('content-type')).toContain('text/markdown');
       expect(res.headers.get('content-disposition')).toContain('attachment');

@@ -5,6 +5,7 @@ import { registerGenerationTools, registerCommunicationTools } from './generatio
 import { registerIndexTools } from './indexing.js';
 import { registerProjectTools } from './projects.js';
 import { registerSearchTools } from './search.js';
+import { registerTransferTools } from './transfer.js';
 
 /**
  * 注册全部 MCP tools。
@@ -36,6 +37,7 @@ export function registerAllTools(mcp: McpServer): void {
           '文档生成: generate_document（功能文档/使用说明/需求文档/沟通纪要，附变更记录）',
           '文档关联: list_related_documents（自动关联 + 需求变更联动提示）',
           '沟通归档: add_communication（一段文字 + 渠道/参与方/时间，变更可追溯）',
+          '项目导入导出: export_project / import_project（项目资料 bundle 打包与合并导入，同名文档自动合并、版本去重追加）',
         ],
       }, null, 2),
     }],
@@ -47,4 +49,5 @@ export function registerAllTools(mcp: McpServer): void {
   registerIndexTools(mcp);
   registerGenerationTools(mcp);
   registerCommunicationTools(mcp);
+  registerTransferTools(mcp);
 }

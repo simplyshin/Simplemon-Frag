@@ -4,17 +4,22 @@ import { getDb } from '../../db/index.js';
 import { embedAfterWrite } from '../../services/embedding.js';
 import { relatedHint } from '../../services/links.js';
 import { resolveDocument, resolveProject } from '../../services/resolve.js';
+import { DOC_TYPES, isDocType } from '../../services/doc-classify.js';
 import {
   addDocument,
   deleteDocument,
   getDocument,
   listDocuments,
   readDocumentFile,
+  setDocumentType,
   updateDocument,
 } from '../../services/document.js';
 import { exportDocument } from '../../services/export.js';
 import { scheduleRebuild } from '../../services/indexing.js';
 import { fail, handle, ok } from './shared.js';
+
+const docTypeValues = DOC_TYPES.map((t) => t.value) as [string, ...string[]];
+const docTypeDescription = '文档分类：requirement 需求 / contract 合同 / adjustment 调整记录 / tech 技术说明 / test 测试 / other 其他';
 
 /**
  * Tools 3-7：文档 CRUD（每次更新追加版本并重新分块，FTS 自动同步）。
@@ -24,37 +29,56 @@ import { fail, handle, ok } from './shared.js';
 export function registerDocumentTools(mcp: McpServer): void {
   mcp.registerTool('list_documents', {
     title: '列出项目文档',
-    description: '列出指定项目下的全部文档（不含已删除），返回文档 id、标题、当前版本号。',
+    description:
+      '列出指定项目下的文档（不含已删除），支持按分类过滤、标题关键词搜索与分页，' +
+      '返回 total、各分类计数 counts 与文档列表 items（含 id、标题、分类、来源、版本号）。',
     inputSchema: {
       project_id: z.string().min(1).describe('项目 id 或项目名称（名称支持模糊，忽略空格/下划线/大小写）'),
+      doc_type: z.enum(docTypeValues).optional()
+        .describe(`按分类过滤，可选。${docTypeDescription}`),
+      keyword: z.string().optional().describe('标题子串搜索，可选'),
+      limit: z.number().int().min(0).optional()
+        .describe('返回条数上限（可选，不传返回全部）'),
     },
-  }, async ({ project_id }) => handle(() => {
+  }, async ({ project_id, doc_type, keyword, limit }) => handle(() => {
     const p = resolveProject(getDb(), project_id);
-    return ok(listDocuments(getDb(), p.id));
+    const docType = doc_type !== undefined && isDocType(doc_type) ? doc_type : undefined;
+    const r = listDocuments(getDb(), p.id, {
+      docType,
+      keyword,
+      page: 1,
+      pageSize: limit ?? 0,
+    });
+    return ok({ total: r.total, counts: r.counts, items: r.items });
   }));
 
   mcp.registerTool('add_document', {
     title: '添加文档',
     description:
       '向项目添加一篇文档（v1 版本）。content 直接给文本，或给 file_path 读取本地文件。' +
-      '服务端会自动按标题分块并建立全文索引。成功返回 document_id 与分块数量。',
+      '服务端会自动按标题分块并建立全文索引。标题匹配到项目内已有文档时自动追加为新版本（不新建重复文档）。' +
+      '成功返回 document_id 与分块数量。',
     inputSchema: {
       project_id: z.string().min(1).describe('目标项目 id 或名称（支持模糊）'),
       title: z.string().min(1).describe('文档标题，如「需求说明」'),
       content: z.string().optional().describe('文档正文（markdown），与 file_path 二选一'),
       file_path: z.string().optional().describe('本地文件绝对路径，支持 md/txt/docx/pdf'),
       change_note: z.string().optional().describe('变更说明，可选，默认「初始版本」'),
+      doc_type: z.enum(docTypeValues).optional()
+        .describe(`文档分类，可选，缺省按标题关键词自动推断。${docTypeDescription}`),
     },
   }, async (args) => {
     try {
       const project = resolveProject(getDb(), args.project_id);
       // file_path 支持 md/txt（utf-8）、docx、pdf（P2 解析增强）
       const content = args.file_path ? await readDocumentFile(args.file_path) : args.content;
+      const docType = args.doc_type !== undefined && isDocType(args.doc_type) ? args.doc_type : undefined;
       const r = addDocument(getDb(), {
         projectId: project.id,
         title: args.title,
         content,
         changeNote: args.change_note,
+        docType,
       });
       const embedding = await embedAfterWrite(getDb(), r.document_id);
       // P4 需求变更联动：返回自动关联文档，提醒 AI 检查是否需要同步更新
@@ -143,6 +167,8 @@ export function registerDocumentTools(mcp: McpServer): void {
       project_id: z.string().optional().describe('项目 id 或名称（可选，标题重名时用于消歧）'),
       content: z.string().min(1).describe('新的完整正文（markdown）'),
       change_note: z.string().optional().describe('本次变更说明，如「新增退款流程章节」'),
+      doc_type: z.enum(docTypeValues).optional()
+        .describe(`文档分类，可选，传入时同时更新文档分类。${docTypeDescription}`),
     },
   }, async (args) => {
     try {
@@ -155,6 +181,8 @@ export function registerDocumentTools(mcp: McpServer): void {
         content: args.content,
         changeNote: args.change_note,
       });
+      const docType = args.doc_type !== undefined && isDocType(args.doc_type) ? args.doc_type : undefined;
+      if (docType) setDocumentType(getDb(), doc.id, docType);
       const embedding = await embedAfterWrite(getDb(), r.document_id);
       // P4 需求变更联动：返回自动关联文档，提醒 AI 检查是否需要同步更新
       const related = relatedHint(getDb(), r.document_id);

@@ -110,6 +110,8 @@ export function rebuildIndex(
     sourceType: 'index',
     createdBy: 'system',
     metadata: fingerprint,
+    // 索引文档有自己的 existing/update 生命周期，不参与同名合并
+    mergeSameTitle: false,
   });
   return { document_id: r.document_id, version_no: r.version_no, doc_count: docs.length, action: 'created' };
 }

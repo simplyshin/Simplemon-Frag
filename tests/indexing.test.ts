@@ -66,7 +66,7 @@ describe('indexing service', () => {
     const idx = getDocument(db, { projectId, title: '《项目文档索引》' });
     expect(idx.content).toContain('更新后的正文');
     const docs = listDocuments(db, projectId);
-    const reqDoc = docs.find((d) => d.title === '需求说明');
+    const reqDoc = docs.items.find((d) => d.title === '需求说明');
     expect(reqDoc?.version_no).toBe(2);
   });
 

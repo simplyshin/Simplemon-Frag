@@ -28,8 +28,17 @@ export interface DocumentSummary {
   project_id: string;
   title: string;
   source_type: string;
+  doc_type: string;
   version_no: number;
   updated_at: string;
+}
+
+export interface DocumentListResult {
+  items: DocumentSummary[];
+  total: number;
+  page: number;
+  page_size: number;
+  counts: Record<string, number>;
 }
 
 export interface DocumentFull {
@@ -37,6 +46,7 @@ export interface DocumentFull {
   project_id: string;
   title: string;
   source_type: string;
+  doc_type: string;
   version_no: number;
   updated_at: string;
   content: string;

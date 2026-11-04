@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import type { Db } from '../db/index.js';
 import { chunkContent } from './chunk.js';
 import { hashContent } from './hash.js';
+import { findMergeableDocument, inferDocType, type DocType } from './doc-classify.js';
 
 const now = (): string => new Date().toISOString();
 
@@ -73,6 +74,7 @@ export interface DocumentSummary {
   project_id: string;
   title: string;
   source_type: string;
+  doc_type: DocType;
   version_no: number;
   updated_at: string;
 }
@@ -121,6 +123,7 @@ interface DocumentRow {
   project_id: string;
   title: string;
   source_type: string;
+  doc_type: DocType;
   latest_version_id: string | null;
   deleted_at: string | null;
   updated_at: string;
@@ -157,8 +160,19 @@ export function addDocument(
     createdBy?: string;
     /** 沟通元数据等扩展信息（P5），JSON 序列化存 documents.metadata */
     metadata?: Record<string, unknown>;
+    /** 显式指定分类优先；缺省按标题关键词自动推断 */
+    docType?: DocType;
+    /** 同名（含归一化后同名）文档自动合并为新版本；默认 true，内部自动索引/生成文档应传 false */
+    mergeSameTitle?: boolean;
   },
-): { document_id: string; version_no: number; chunk_count: number; duplicates: { id: string; title: string }[] } {
+): {
+  document_id: string;
+  version_no: number;
+  chunk_count: number;
+  duplicates: { id: string; title: string }[];
+  merged?: boolean;
+  doc_type: DocType;
+} {
   const content = input.filePath ? readFileSync(input.filePath, 'utf-8') : input.content;
   if (!content?.trim()) throw new Error('content 与 file_path 至少提供一个且不能为空');
 
@@ -173,18 +187,40 @@ export function addDocument(
     ORDER BY created_at
   `).all(input.projectId, contentHash) as { id: string; title: string }[];
 
+  const docType = input.docType ?? inferDocType(input.title);
+
+  // 同名合并：标题（含归一化后）匹配到已有文档 → 追加为新版本而非新建，
+  // 避免同一文档反复上传导致列表堆积（复用 updateDocument 版本机制）
+  if (input.mergeSameTitle !== false) {
+    const target = findMergeableDocument(db, input.projectId, input.title.trim());
+    if (target) {
+      const r = updateDocument(db, {
+        documentId: target.id,
+        content,
+        changeNote: input.changeNote ?? '同名文档自动合并为新版本',
+        createdBy: input.createdBy,
+      });
+      // 显式指定的分类覆盖；自动推断不覆盖（保留人工设置）
+      if (input.docType) {
+        db.prepare('UPDATE documents SET doc_type = ? WHERE id = ?').run(input.docType, target.id);
+      }
+      return { ...r, duplicates, merged: true, doc_type: input.docType ?? docType };
+    }
+  }
+
   const docId = randomUUID();
   const versionId = randomUUID();
   const ts = now();
 
   const result = db.transaction(() => {
     db.prepare(
-      'INSERT INTO documents (id, project_id, title, source_type, metadata, content_hash, latest_version_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)',
+      'INSERT INTO documents (id, project_id, title, source_type, doc_type, metadata, content_hash, latest_version_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)',
     ).run(
       docId,
       input.projectId,
       input.title.trim(),
       input.sourceType ?? 'mcp',
+      docType,
       input.metadata ? JSON.stringify(input.metadata) : '{}',
       contentHash,
       ts,
@@ -198,7 +234,7 @@ export function addDocument(
     return ids.length;
   })();
 
-  return { document_id: docId, version_no: 1, chunk_count: result, duplicates };
+  return { document_id: docId, version_no: 1, chunk_count: result, duplicates, doc_type: docType };
 }
 
 export function updateDocument(
@@ -210,6 +246,8 @@ export function updateDocument(
     createdBy?: string;
     /** 可选：整体替换 documents.metadata（索引自动重建用它落新鲜度指纹） */
     metadata?: Record<string, unknown>;
+    /** 可选：版本时间戳（ISO 8601，项目导入保留原版本时间用；非法/缺省用当前时间） */
+    createdAt?: string;
   },
 ): { document_id: string; version_no: number; chunk_count: number; vectors_reused: number } {
   if (!input.content?.trim()) throw new Error('content 不能为空');
@@ -224,7 +262,9 @@ export function updateDocument(
   ).get(input.documentId) as { no: number };
   const versionNo = (maxNo.no ?? 0) + 1;
   const versionId = randomUUID();
-  const ts = now();
+  const ts = input.createdAt !== undefined && !Number.isNaN(Date.parse(input.createdAt))
+    ? new Date(input.createdAt).toISOString()
+    : now();
   let reuseCount = 0;
 
   const chunkCount = db.transaction(() => {
@@ -337,6 +377,7 @@ export function getDocument(
     project_id: doc.project_id,
     title: doc.title,
     source_type: doc.source_type,
+    doc_type: doc.doc_type,
     version_no: version.version_no,
     updated_at: doc.updated_at,
   };
@@ -387,18 +428,90 @@ export function getDocument(
   return base;
 }
 
-export function listDocuments(db: Db, projectId: string): DocumentSummary[] {
+export interface ListDocumentsOptions {
+  /** 按分类过滤；不传 = 全部 */
+  docType?: DocType;
+  /** 标题子串搜索（LIKE，通配符已转义） */
+  keyword?: string;
+  /** 页码，从 1 开始，默认 1 */
+  page?: number;
+  /** 每页条数，默认 20；传 0 = 不分页全量返回 */
+  pageSize?: number;
+}
+
+export interface DocumentListResult {
+  items: DocumentSummary[];
+  total: number;
+  page: number;
+  pageSize: number;
+  /** 项目级各分类计数（不受 keyword/docType 过滤影响），供前端分类 Tab 常显 */
+  counts: Record<DocType, number>;
+}
+
+function escapeLike(keyword: string): string {
+  return keyword.replace(/[\\%_]/g, (c) => `\\${c}`);
+}
+
+export function listDocuments(db: Db, projectId: string, opts?: ListDocumentsOptions): DocumentListResult {
   const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(projectId);
   if (!project) throw new Error(`项目不存在: ${projectId}（可先调用 list_projects 获取）`);
 
-  return db.prepare(`
-    SELECT d.id, d.project_id, d.title, d.source_type,
+  const conditions = ['d.project_id = ?', 'd.deleted_at IS NULL'];
+  const params: (string | number)[] = [projectId];
+  if (opts?.docType) {
+    conditions.push('d.doc_type = ?');
+    params.push(opts.docType);
+  }
+  if (opts?.keyword?.trim()) {
+    conditions.push(`d.title LIKE ? ESCAPE '\\'`);
+    params.push(`%${escapeLike(opts.keyword.trim())}%`);
+  }
+  const where = conditions.join(' AND ');
+
+  const total = (db.prepare(`SELECT COUNT(*) AS n FROM documents d WHERE ${where}`).get(...params) as { n: number }).n;
+
+  const page = Math.max(1, opts?.page ?? 1);
+  const pageSize = opts?.pageSize ?? 20;
+  let sql = `
+    SELECT d.id, d.project_id, d.title, d.source_type, d.doc_type,
            v.version_no AS version_no, d.updated_at
     FROM documents d
     LEFT JOIN document_versions v ON v.id = d.latest_version_id
-    WHERE d.project_id = ? AND d.deleted_at IS NULL
-    ORDER BY d.created_at
-  `).all(projectId) as DocumentSummary[];
+    WHERE ${where}
+    ORDER BY d.updated_at DESC, d.created_at DESC
+  `;
+  if (pageSize > 0) {
+    sql += ' LIMIT ? OFFSET ?';
+    const items = db.prepare(sql).all(...params, pageSize, (page - 1) * pageSize) as DocumentSummary[];
+    return { items, total, page, pageSize, counts: countByDocType(db, projectId) };
+  }
+  const items = db.prepare(sql).all(...params) as DocumentSummary[];
+  return { items, total, page, pageSize: 0, counts: countByDocType(db, projectId) };
+}
+
+/** 项目级各分类文档计数（GROUP BY，供前端分类 Tab 常显） */
+function countByDocType(db: Db, projectId: string): Record<DocType, number> {
+  const rows = db.prepare(`
+    SELECT doc_type, COUNT(*) AS n FROM documents
+    WHERE project_id = ? AND deleted_at IS NULL
+    GROUP BY doc_type
+  `).all(projectId) as { doc_type: DocType; n: number }[];
+  const counts = { requirement: 0, contract: 0, adjustment: 0, tech: 0, test: 0, other: 0 };
+  for (const r of rows) {
+    if (r.doc_type in counts) counts[r.doc_type] = r.n;
+  }
+  return counts;
+}
+
+/** 手动修改文档分类（不追加版本、不参与索引） */
+export function setDocumentType(db: Db, documentId: string, docType: DocType): { document_id: string; doc_type: DocType } {
+  const result = db.prepare(
+    'UPDATE documents SET doc_type = ? WHERE id = ? AND deleted_at IS NULL',
+  ).run(docType, documentId);
+  if (result.changes === 0) {
+    throw new Error(`文档不存在或已删除: ${documentId}`);
+  }
+  return { document_id: documentId, doc_type: docType };
 }
 
 export function deleteDocument(db: Db, documentId: string): { document_id: string; deleted: boolean } {

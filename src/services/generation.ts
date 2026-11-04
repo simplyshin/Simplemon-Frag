@@ -243,6 +243,8 @@ export async function generateDocument(
       changeNote: `首次生成（${generatedBy}，来源 ${docs.length} 篇文档）`,
       sourceType: 'generated',
       createdBy: 'system',
+      // 同名合并已在上游限定 generated 范围处理，这里不参与通用同名合并
+      mergeSameTitle: false,
     });
     r = { ...added, vectors_reused: 0 };
   }

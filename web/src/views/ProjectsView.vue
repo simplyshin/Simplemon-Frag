@@ -2,6 +2,8 @@
 import { onMounted, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import type { UploadRequestOptions } from 'element-plus';
+import { Download, Upload } from '@element-plus/icons-vue';
 import PageHeader from '../components/PageHeader.vue';
 import { api, type Project } from '../api';
 
@@ -10,6 +12,18 @@ const projects = ref<Project[]>([]);
 const loading = ref(false);
 const dialog = ref(false);
 const form = ref({ name: '', description: '' });
+const importing = ref(false);
+
+interface ImportStats {
+  project_name: string;
+  project_created: boolean;
+  documents_created: number;
+  documents_merged: number;
+  versions_added: number;
+  versions_skipped: number;
+  warnings: string[];
+  embedding: string;
+}
 
 async function load() {
   loading.value = true;
@@ -20,6 +34,37 @@ async function load() {
   } finally {
     loading.value = false;
   }
+}
+
+/** 导入项目 bundle（multipart 上传 JSON），完成后展示合并统计 */
+async function doImport(options: UploadRequestOptions) {
+  importing.value = true;
+  try {
+    const form = new FormData();
+    form.append('file', options.file);
+    const r = await api<ImportStats>('POST', '/api/projects/import', form);
+    const lines = [
+      `项目「${r.project_name}」${r.project_created ? '新建' : '已存在，资料已合并'}`,
+      `文档：新建 ${r.documents_created} 篇，合并 ${r.documents_merged} 篇`,
+      `版本：追加 ${r.versions_added} 个，跳过相同 ${r.versions_skipped} 个`,
+      r.embedding,
+      ...(r.warnings.length ? ['警告：', ...r.warnings] : []),
+    ];
+    await ElMessageBox.alert(lines.join('<br/>'), '导入完成', {
+      dangerouslyUseHTMLString: false,
+      confirmButtonText: '知道了',
+    });
+    load();
+  } catch (e) {
+    ElMessage.error((e as Error).message);
+  } finally {
+    importing.value = false;
+  }
+}
+
+/** 导出项目 bundle（服务端 Content-Disposition 附件下载） */
+function exportProject(p: Project) {
+  window.open(`/api/projects/${p.id}/export`);
 }
 
 async function create() {
@@ -58,6 +103,16 @@ onMounted(load);
 <template>
   <div style="padding: 20px">
     <PageHeader title="项目管理">
+      <el-tooltip content="导入项目资料（JSON bundle，同名文档自动合并、版本去重追加）" placement="top">
+        <el-upload
+          :show-file-list="false"
+          accept=".json,application/json"
+          :http-request="doImport"
+          :disabled="importing"
+        >
+          <el-button :icon="Upload" :loading="importing">导入项目</el-button>
+        </el-upload>
+      </el-tooltip>
       <el-button type="primary" @click="dialog = true">新建项目</el-button>
     </PageHeader>
 
@@ -67,9 +122,10 @@ onMounted(load);
       <el-table-column prop="created_at" label="创建时间" width="180">
         <template #default="{ row }">{{ new Date(row.created_at).toLocaleString() }}</template>
       </el-table-column>
-      <el-table-column label="操作" width="160">
+      <el-table-column label="操作" width="200">
         <template #default="{ row }">
           <el-button size="small" type="primary" link @click="router.push(`/project/${row.id}`)">文档</el-button>
+          <el-button size="small" type="primary" link :icon="Download" @click="exportProject(row)">导出</el-button>
           <el-button size="small" type="danger" link @click="remove(row)">删除</el-button>
         </template>
       </el-table-column>

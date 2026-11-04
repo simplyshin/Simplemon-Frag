@@ -20,7 +20,7 @@ export interface ExportResult {
 }
 
 /** Windows/macOS/Linux 通用非法文件名字符 → 下划线 */
-function sanitizeFilename(title: string): string {
+export function sanitizeFilename(title: string): string {
   const safe = title.replace(/[\\/:*?"<>|\r\n\t]+/g, '_').trim();
   return safe || 'document';
 }

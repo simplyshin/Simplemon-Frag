@@ -10,14 +10,18 @@ import { DATA_DIR } from '../src/config/index.js';
 
 /** 改进批次：重复导入检测 / get_document 大纲与分页 / export_document */
 describe('重复导入检测（content_hash）', () => {
-  it('迁移 v3：user_version=3 且存量文档 content_hash 已回填', () => {
+  it('迁移 v3/v4：user_version=4 且存量文档 content_hash 与 doc_type 已回填', () => {
     const db = createTestDb();
     const { docIds } = seedProject(db);
-    expect(db.pragma('user_version', { simple: true })).toBe(3);
+    expect(db.pragma('user_version', { simple: true })).toBe(4);
     for (const id of docIds) {
       const hash = (db.prepare('SELECT content_hash FROM documents WHERE id = ?').get(id) as { content_hash: string }).content_hash;
       expect(hash).toBeTruthy();
     }
+    // v4 回填：按标题关键词推断分类（「需求说明」→需求，「接口设计」→技术说明）
+    const types = (db.prepare('SELECT title, doc_type FROM documents').all() as { title: string; doc_type: string }[]);
+    expect(types.find((t) => t.title === '需求说明')?.doc_type).toBe('requirement');
+    expect(types.find((t) => t.title === '接口设计')?.doc_type).toBe('tech');
   });
 
   it('同内容再次入库返回 duplicates 提示（不阻断）', () => {

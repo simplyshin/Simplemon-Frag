@@ -9,6 +9,7 @@
 
 import type { Db } from './index.js';
 import { hashContent } from '../services/hash.js';
+import { inferDocType } from '../services/doc-classify.js';
 
 export interface Migration {
   version: number;
@@ -170,5 +171,26 @@ CREATE INDEX idx_documents_content_hash
   },
 };
 
+/** v4 —— 文档业务分类：doc_type（需求/合同/调整记录/技术说明/测试/其他），存量按标题关键词回填 */
+export const MIGRATION_V4: Migration = {
+  version: 4,
+  name: 'document-doc-type',
+  sql: `
+ALTER TABLE documents ADD COLUMN doc_type TEXT NOT NULL DEFAULT 'other';
+CREATE INDEX idx_documents_doc_type
+  ON documents(project_id, doc_type)
+  WHERE deleted_at IS NULL;
+`,
+  after: (db) => {
+    // 回填存量文档（v4 新列默认值全为 other，逐行按标题推断；同事务内，失败即回滚）
+    const rows = db.prepare(`SELECT id, title FROM documents WHERE doc_type = 'other'`).all() as {
+      id: string;
+      title: string;
+    }[];
+    const update = db.prepare('UPDATE documents SET doc_type = ? WHERE id = ?');
+    for (const row of rows) update.run(inferDocType(row.title), row.id);
+  },
+};
+
 /** 全部按版本号升序排列，新增迁移追加到数组末尾 */
-export const MIGRATIONS: readonly Migration[] = [MIGRATION_V1, MIGRATION_V2, MIGRATION_V3];
+export const MIGRATIONS: readonly Migration[] = [MIGRATION_V1, MIGRATION_V2, MIGRATION_V3, MIGRATION_V4];
