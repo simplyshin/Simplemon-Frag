@@ -66,18 +66,31 @@ export async function embedPendingChunks(
     ensureVecTable(db, embedder.fingerprint, embedder.dim);
   }
 
-  const remaining = [...rows];
+  const remaining = [...new Map(rows.map((r) => [r.id, r])).values()];
   let embedded = 0;
   let failed = 0;
 
+  // 过滤并发补算已完成的 chunk：vec0 虚拟表不遵循 INSERT OR IGNORE 的冲突忽略
+  // 语义（xUpdate 直接报 UNIQUE constraint），导入后的一次性补算与 retry loop
+  // 并发选中同一批 chunk 时必须先查再插，避免主键冲突导致整批 32 块误判失败
+  const filterExisting = (batch: { id: number; content: string }[]): { id: number; content: string }[] => {
+    const placeholders = batch.map(() => '?').join(',');
+    const existing = new Set(
+      (db.prepare(`SELECT chunk_id FROM chunks_vec WHERE chunk_id IN (${placeholders})`)
+        .all(...batch.map((r) => BigInt(r.id))) as { chunk_id: number | bigint }[])
+        .map((r) => Number(r.chunk_id)),
+    );
+    return batch.filter((r) => !existing.has(r.id));
+  };
+
+  // vec0 的 PK 列要求 INTEGER：better-sqlite3 默认把 JS number 绑成 REAL，必须用 BigInt
+  const insert = db.prepare('INSERT OR IGNORE INTO chunks_vec (chunk_id, embedding) VALUES (?, ?)');
+
   while (remaining.length) {
     const batch = remaining.splice(0, 32);
+    let vectors: number[][] = [];
     try {
-      const vectors = await embedder.embedPassages(batch.map((r) => r.content));
-      // vec0 的 PK 列要求 INTEGER：better-sqlite3 默认把 JS number 绑成 REAL，必须用 BigInt。
-      // OR IGNORE：内联补算与 retry loop 并发选中同一 chunk 时静默去重（同一模型先到先得，
-      // 避免主键冲突导致整批 32 块误判失败）
-      const insert = db.prepare('INSERT OR IGNORE INTO chunks_vec (chunk_id, embedding) VALUES (?, ?)');
+      vectors = await embedder.embedPassages(batch.map((r) => r.content));
       const insertAll = db.transaction(() => {
         for (let i = 0; i < batch.length; i++) {
           insert.run(BigInt(batch[i].id), JSON.stringify(vectors[i]));
@@ -86,6 +99,22 @@ export async function embedPendingChunks(
       insertAll();
       embedded += batch.length;
     } catch (err) {
+      // 并发冲突兜底：vec0 xUpdate 报 UNIQUE constraint 时整批事务已回滚，
+      // 逐块重插（对方并发已写入的自动跳过），失败的块保持待补算不阻塞其余块
+      if (/UNIQUE constraint/i.test((err as Error).message)) {
+        const missing = filterExisting(batch);
+        let recovered = 0;
+        for (let i = 0; i < missing.length; i++) {
+          const idx = batch.findIndex((b) => b.id === missing[i].id);
+          try {
+            insert.run(BigInt(missing[i].id), JSON.stringify(vectors[idx]));
+            recovered++;
+          } catch { /* 对方并发先写入，留待 retry loop */ }
+        }
+        embedded += recovered;
+        failed += batch.length - recovered;
+        continue;
+      }
       failed += batch.length;
       console.error(`[embedding] 批量向量化失败（${batch.length} 块保持待补算）: ${(err as Error).message}`);
       break; // 连续失败大概率是 provider 层问题，留待下次重试
