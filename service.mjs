@@ -263,15 +263,18 @@ async function ensureWinsw(onProgress) {
       onProgress?.(`正在下载 WinSW: ${url}`);
       const res = await fetch(url, {
         redirect: 'follow',
-        signal: AbortSignal.timeout(120_000),
+        signal: AbortSignal.timeout(60_000),
       });
-      if (!res.ok) continue;
+      if (!res.ok) {
+        onProgress?.(`HTTP ${res.status}，尝试下一个镜像...`);
+        continue;
+      }
       const buf = Buffer.from(await res.arrayBuffer());
       if (buf.length < 200 * 1024) continue; // 防镜像返回错误页
       writeFileSync(exe, buf);
       return exe;
     } catch {
-      /* 尝试下一个镜像 */
+      onProgress?.('该地址失败或超时，尝试下一个镜像...');
     }
   }
   return null;
@@ -677,8 +680,13 @@ async function cmdInstall(autoStart = true) {
   const args = modeArgs(cfg);
   let manager = cfg.daemon.manager;
   if (manager === 'auto') {
-    manager = findNssm() ? 'nssm' : 'winsw';
-    info(`daemon.manager=auto → 选择 ${manager}`);
+    const nssm = findNssm();
+    manager = nssm ? 'nssm' : 'winsw';
+    info(
+      nssm
+        ? `daemon.manager=auto → 选择 nssm（${nssm}）`
+        : `daemon.manager=auto → 选择 winsw（未找到 NSSM：可将 nssm.exe 放入 tools/nssm/ 或加入 PATH 后重试）`,
+    );
   }
 
   if (manager === 'nssm') {
