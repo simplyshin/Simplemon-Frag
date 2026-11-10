@@ -21,8 +21,16 @@ const uploading = ref(false);
 // 分类（动态，来自 /api/doc-categories）/ 时间筛选 / 搜索 / 分页状态
 const categories = ref<DocCategory[]>([]);
 const activeType = ref<string>('all');
-// 时间筛选：快捷段 'all'=全部 / 7|15|30=近 N 天 / null=自定义区间；默认近 7 天
+// 时间筛选下拉：'all'=全部 / 7|15|30=近 N 天 / null=自定义区间（默认近 7 天）
 const quickRange = ref<number | 'all' | null>(7);
+const QUICK_OPTIONS = [
+  { value: 'all', label: '全部时间' },
+  { value: 7, label: '近7天' },
+  { value: 15, label: '近15天' },
+  { value: 30, label: '近30天' },
+] as const;
+/** 下拉显示值：手动选了自定义日期区间时显示"自定义" */
+const quickDisplay = computed(() => quickRange.value ?? 'custom');
 const fmtLocalDate = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 /** 近 N 个自然日（含今天）的本地日期区间 */
@@ -215,12 +223,14 @@ onMounted(() => {
         <el-option value="all" :label="`全部（${countOf('all')}）`" />
         <el-option v-for="c in categories" :key="c.id" :value="c.id" :label="`${c.name}（${countOf(c.id)}）`" />
       </el-select>
-      <el-radio-group :model-value="quickRange" size="small" @change="pickQuick">
-        <el-radio-button value="all">全部</el-radio-button>
-        <el-radio-button :value="7">近7天</el-radio-button>
-        <el-radio-button :value="15">近15天</el-radio-button>
-        <el-radio-button :value="30">近30天</el-radio-button>
-      </el-radio-group>
+      <el-select
+        :model-value="quickDisplay"
+        style="width: 120px"
+        @change="pickQuick"
+      >
+        <el-option value="custom" label="自定义" disabled />
+        <el-option v-for="o in QUICK_OPTIONS" :key="o.value" :value="o.value" :label="o.label" />
+      </el-select>
       <el-date-picker
         v-model="dateRange"
         type="daterange"
