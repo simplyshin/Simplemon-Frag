@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus';
 import { diffLines } from 'diff';
 import { marked } from 'marked';
 import PageHeader from '../components/PageHeader.vue';
+import CategoryTag from '../components/CategoryTag.vue';
 import { api, type DocCategory, type DocumentFull, type VersionSummary } from '../api';
 
 interface RelatedDoc { document_id: string; title: string; score: number; reason: string }
@@ -114,8 +115,7 @@ const categories = ref<DocCategory[]>([]);
 const catNameMap = computed(() => Object.fromEntries(categories.value.map((c) => [c.id, c.name])));
 const catColorMap = computed(() => Object.fromEntries(categories.value.map((c) => [c.id, c.color])));
 const docTypeLabel = (t: string) => catNameMap.value[t] ?? t;
-const docTypeTag = (t: string): 'primary' | 'success' | 'info' | 'warning' | 'danger' =>
-  (catColorMap.value[t] as 'primary' | 'success' | 'info' | 'warning' | 'danger' | undefined) ?? 'info';
+const docTypeColor = (t: string) => catColorMap.value[t] ?? 'info';
 
 async function changeDocType(docType: string) {
   if (!doc.value || docType === doc.value.doc_type) return;
@@ -138,9 +138,9 @@ async function changeDocType(docType: string) {
       <template #title-extra>
         <el-tag size="small">v{{ viewingVersion ?? doc?.version_no }}</el-tag>
         <el-dropdown v-if="doc && viewingVersion === null" trigger="click" @command="changeDocType">
-          <el-tag size="small" :type="docTypeTag(doc.doc_type)" style="cursor: pointer">
-            {{ docTypeLabel(doc.doc_type) }}
-          </el-tag>
+          <span style="cursor: pointer">
+            <CategoryTag :name="docTypeLabel(doc.doc_type)" :color="docTypeColor(doc.doc_type)" />
+          </span>
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item

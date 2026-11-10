@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import type { UploadRequestOptions } from 'element-plus';
 import { Search, Share, Upload } from '@element-plus/icons-vue';
 import PageHeader from '../components/PageHeader.vue';
+import CategoryTag from '../components/CategoryTag.vue';
 import { api, type DocCategory, type DocumentListResult, type DocumentSummary, type Project } from '../api';
 
 const route = useRoute();
@@ -43,8 +44,7 @@ async function loadCategories() {
 const catNameMap = computed(() => Object.fromEntries(categories.value.map((c) => [c.id, c.name])));
 const catColorMap = computed(() => Object.fromEntries(categories.value.map((c) => [c.id, c.color])));
 const docTypeLabel = (t: string) => catNameMap.value[t] ?? t;
-const docTypeTag = (t: string): 'primary' | 'success' | 'info' | 'warning' | 'danger' =>
-  (catColorMap.value[t] as 'primary' | 'success' | 'info' | 'warning' | 'danger' | undefined) ?? 'info';
+const docTypeColor = (t: string) => catColorMap.value[t] ?? 'info';
 
 /** 本地时区日期 → UTC ISO 边界（updated_at 存 UTC，按本地"自然日"对齐） */
 const toIso = (d: string, endOfDay = false) =>
@@ -221,9 +221,7 @@ onMounted(() => {
       <el-table-column prop="doc_type" label="分类" width="140">
         <template #default="{ row }">
           <el-dropdown trigger="click" @command="(v: string) => changeDocType(row, v)">
-            <el-tag size="small" :type="docTypeTag(row.doc_type)" style="cursor: pointer">
-              {{ docTypeLabel(row.doc_type) }}
-            </el-tag>
+            <CategoryTag :name="docTypeLabel(row.doc_type)" :color="docTypeColor(row.doc_type)" style="cursor: pointer" />
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item

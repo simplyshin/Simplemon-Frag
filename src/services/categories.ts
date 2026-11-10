@@ -17,10 +17,11 @@ export interface DocCategory {
   created_at: string;
 }
 
-/** 允许的标签色（与 el-tag type 对应） */
+/** 允许的预设标签色（与 el-tag type 对应）；自定义颜色用 hex（#rgb / #rrggbb） */
 export const CATEGORY_COLORS = ['primary', 'success', 'info', 'warning', 'danger'] as const;
 
 const COLOR_SET = new Set<string>(CATEGORY_COLORS);
+const HEX_COLOR_RE = /^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i;
 
 export function listCategories(db: Db): DocCategory[] {
   return db.prepare(
@@ -36,7 +37,9 @@ export function isKnownDocType(db: Db, v: unknown): v is string {
 
 function normalizeColor(v: unknown): string {
   const s = String(v ?? 'info').trim();
-  return COLOR_SET.has(s) ? s : 'info';
+  if (COLOR_SET.has(s)) return s;
+  if (HEX_COLOR_RE.test(s)) return s.toLowerCase();
+  return 'info';
 }
 
 function cleanName(raw: unknown): string {

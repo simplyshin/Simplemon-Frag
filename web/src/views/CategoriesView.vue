@@ -3,15 +3,19 @@ import { onMounted, ref } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Plus } from '@element-plus/icons-vue';
 import PageHeader from '../components/PageHeader.vue';
+import CategoryTag from '../components/CategoryTag.vue';
 import { api, type DocCategory } from '../api';
 
-const TAG_COLORS = [
-  { value: 'primary', label: '主色' },
-  { value: 'success', label: '绿色' },
-  { value: 'info', label: '灰色' },
-  { value: 'warning', label: '橙色' },
-  { value: 'danger', label: '红色' },
-] as const;
+/** 预设色板（含 Element Plus 语义色对应 hex + 常用扩展色） */
+const PRESET_HEX: Record<string, string> = {
+  primary: '#409eff', success: '#67c23a', info: '#909399', warning: '#e6a23c', danger: '#f56c6c',
+};
+const PREDEFINE_COLORS = [
+  '#409eff', '#67c23a', '#909399', '#e6a23c', '#f56c6c',
+  '#7c3aed', '#6366f1', '#0ea5a4', '#ec4899', '#f97316',
+];
+/** 预设枚举 → hex（旧数据编辑时转换为具体色值，保存后统一为 hex） */
+const toHex = (c: string) => PRESET_HEX[c] ?? c;
 
 const categories = ref<DocCategory[]>([]);
 const loading = ref(false);
@@ -37,13 +41,14 @@ const saving = ref(false);
 
 function openAdd() {
   editing.value = null;
-  form.value = { name: '', color: 'info', sort: 100 };
+  form.value = { name: '', color: '#909399', sort: 100 };
   dialog.value = true;
 }
 
 function openEdit(row: DocCategory) {
   editing.value = row;
-  form.value = { name: row.name, color: row.color, sort: row.sort };
+  // 旧数据存的是预设枚举名，转换为对应 hex 供选色器显示
+  form.value = { name: row.name, color: toHex(row.color), sort: row.sort };
   dialog.value = true;
 }
 
@@ -99,10 +104,7 @@ async function removeCategory(row: DocCategory) {
   }
 }
 
-const tagType = (c: string) => c as 'primary' | 'success' | 'info' | 'warning' | 'danger';
-
-onMounted(load);
-</script>
+onMounted(load);</script>
 
 <template>
   <div style="padding: 20px">
@@ -116,14 +118,17 @@ onMounted(load);
     <el-table :data="categories" v-loading="loading" stripe>
       <el-table-column label="名称" min-width="160">
         <template #default="{ row }">
-          <el-tag :type="tagType(row.color)">{{ row.name }}</el-tag>
+          <CategoryTag :name="row.name" :color="row.color" />
         </template>
       </el-table-column>
-      <el-table-column label="标签色" width="130">
+      <el-table-column label="标签色" width="110">
         <template #default="{ row }">
-          <el-select :model-value="row.color" size="small" @change="(v: string) => changeColor(row, v)">
-            <el-option v-for="c in TAG_COLORS" :key="c.value" :value="c.value" :label="c.label" />
-          </el-select>
+          <el-color-picker
+            :model-value="toHex(row.color)"
+            size="small"
+            :predefine="PREDEFINE_COLORS"
+            @change="(v: string | null) => v && changeColor(row, v)"
+          />
         </template>
       </el-table-column>
       <el-table-column label="文档数" width="100">
@@ -150,9 +155,8 @@ onMounted(load);
           <el-input v-model="form.name" maxlength="30" placeholder="最多 30 字" @keyup.enter="save" />
         </el-form-item>
         <el-form-item label="标签色">
-          <el-select v-model="form.color" style="width: 140px">
-            <el-option v-for="c in TAG_COLORS" :key="c.value" :value="c.value" :label="c.label" />
-          </el-select>
+          <el-color-picker v-model="form.color" :predefine="PREDEFINE_COLORS" />
+          <span style="margin-left: 10px; font-size: 12px; color: var(--el-text-color-secondary)">{{ form.color }}</span>
         </el-form-item>
         <el-form-item label="排序">
           <el-input-number v-model="form.sort" :min="0" :max="9999" />
