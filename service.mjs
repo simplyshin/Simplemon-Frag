@@ -291,6 +291,33 @@ function serviceInstalled(name) {
   return serviceStatus(name) !== null;
 }
 
+/** 读取服务在注册表中的 ImagePath → { raw, exe }；服务不存在或读取失败返回 null */
+function serviceImagePath(name) {
+  const r = spawnSync(
+    'reg.exe',
+    ['query', `HKLM\\SYSTEM\\CurrentControlSet\\Services\\${name}`, '/v', 'ImagePath'],
+    { encoding: 'utf8' },
+  );
+  if (r.status !== 0) return null;
+  const m = (r.stdout || '').match(/ImagePath\s+REG_SZ\s+(.+)/);
+  if (!m) return null;
+  const raw = m[1].trim();
+  const exe = raw.startsWith('"') ? raw.slice(1, raw.indexOf('"', 1)) : raw.split(/\s+/)[0];
+  return { raw, exe };
+}
+
+/** 判断路径是否位于 dir 之下（不区分大小写与斜杠方向） */
+function isPathUnder(p, dir) {
+  const norm = (s) => s.replace(/"/g, '').replace(/\//g, '\\').toLowerCase().replace(/\\+$/, '');
+  return norm(p).startsWith(`${norm(dir)}\\`);
+}
+
+/** 直接删除服务注册（不清理安装文件；用于注册文件丢失或注册在别处的兜底） */
+function scDeleteService(name) {
+  const r = spawnSync('sc.exe', ['delete', name], { stdio: 'inherit' });
+  return r.status === 0;
+}
+
 function serviceControl(name, action) {
   // action: 'Start' | 'Stop' | 'Restart'
   const ps = `try { ${action}-Service -Name '${name}' -ErrorAction Stop; exit 0 } catch { Write-Host $_.Exception.Message; exit 1 }`;
@@ -638,7 +665,12 @@ async function cmdInstall(autoStart = true) {
     die(`未找到 ${cfg.server.script}，请先执行 npm run build`);
   }
   if (serviceInstalled(name)) {
-    die(`服务 ${name} 已安装。重装请先执行: node service.mjs uninstall`);
+    const img = serviceImagePath(name);
+    const elsewhere = img && !isPathUnder(img.exe, ROOT);
+    die(
+      `服务 ${name} 已安装${elsewhere ? `（注册指向 ${img.exe}，由其他目录安装）` : ''}。`
+      + `重装请先执行: node service.mjs uninstall${elsewhere ? '（到注册目录执行，或本目录加 --force）' : ''}`,
+    );
   }
 
   const args = modeArgs(cfg);
@@ -692,7 +724,7 @@ async function cmdInstall(autoStart = true) {
   }
 }
 
-async function cmdUninstall() {
+async function cmdUninstall(force = false) {
   requireWindows();
   requireAdmin();
   const cfg = loadConfig();
@@ -722,12 +754,33 @@ async function cmdUninstall() {
     if (r.status !== 0) die('nssm 卸载失败');
   } else {
     const svcExe = join(ROOT, 'tools', 'winsw', `${name}.exe`);
-    if (!existsSync(svcExe)) die(`未找到 ${svcExe}，无法卸载`);
-    const r = spawnSync(svcExe, ['uninstall'], { stdio: 'inherit' });
-    if (r.status !== 0) die('WinSW 卸载失败');
-    // 清理生成的 xml 与重命名的 exe（保留 WinSW-x64.exe 源文件供下次使用）
-    for (const f of [join(ROOT, 'tools', 'winsw', `${name}.xml`), svcExe]) {
-      if (existsSync(f)) rmSync(f, { force: true });
+    if (!existsSync(svcExe)) {
+      // 本目录没有 WinSW 安装文件：服务可能是从其他目录安装的，或本目录文件已被清理
+      const img = serviceImagePath(name);
+      if (!img) die(`未找到 ${svcExe}，且系统中未找到服务 ${name} 的注册信息，无法卸载`);
+      if (isPathUnder(img.exe, ROOT)) {
+        info('服务的注册文件指向本目录但已被删除，直接删除服务注册...');
+        if (!scDeleteService(name)) die('删除服务注册失败（sc.exe delete）');
+      } else if (force) {
+        bad(`本目录无安装文件，强制删除服务注册: ${img.raw}`);
+        if (!scDeleteService(name)) die('删除服务注册失败（sc.exe delete）');
+        info(`原安装目录 ${dirname(dirname(img.exe))} 下的安装文件不受影响，可手动清理`);
+      } else {
+        bad(`服务 ${name} 是从其他目录安装的，注册指向: ${img.raw}`);
+        info('两种处理方式:');
+        info(`1. 到安装目录执行卸载（推荐，会同时清理那边的安装文件）:`);
+        info(`   cd ${dirname(dirname(img.exe))}，然后 node service.mjs uninstall`);
+        info('2. 就地删除服务注册（本目录没有文件可清理）:');
+        info('   node service.mjs uninstall --force');
+        process.exit(1);
+      }
+    } else {
+      const r = spawnSync(svcExe, ['uninstall'], { stdio: 'inherit' });
+      if (r.status !== 0) die('WinSW 卸载失败');
+      // 清理生成的 xml 与重命名的 exe（保留 WinSW-x64.exe 源文件供下次使用）
+      for (const f of [join(ROOT, 'tools', 'winsw', `${name}.xml`), svcExe]) {
+        if (existsSync(f)) rmSync(f, { force: true });
+      }
     }
   }
   if (existsSync(INSTALL_MARK)) rmSync(INSTALL_MARK, { force: true });
@@ -852,7 +905,7 @@ function cmdHelp() {
   restart       重启服务
   status        查看运行状态与健康检查
   install       安装为 Windows 服务（需管理员权限终端）
-  uninstall     卸载 Windows 服务（需管理员权限终端）
+  uninstall     卸载 Windows 服务（需管理员权限终端；--force 可就地删除注册在别处/文件丢失的服务）
   logs [行数]   查看最近日志（默认 50 行）
   doctor        环境自检（Node/构建/鉴权/端口/服务管理器）
   init          生成默认 service.config.json
@@ -884,7 +937,7 @@ const commands = {
   restart: cmdRestart,
   status: cmdStatus,
   install: () => cmdInstall(!rest.includes('--no-start')),
-  uninstall: cmdUninstall,
+  uninstall: () => cmdUninstall(rest.includes('--force')),
   logs: () => cmdLogs(Number(rest[0]) > 0 ? Number(rest[0]) : 50),
   doctor: cmdDoctor,
   init: cmdInit,
