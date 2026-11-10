@@ -46,5 +46,6 @@ export const router = createRouter({
     },
     { path: '/search', name: 'search', component: () => import('./views/SearchView.vue'), meta: { title: '文档检索' } },
     { path: '/settings', name: 'settings', component: () => import('./views/SettingsView.vue'), meta: { title: 'Provider 设置' } },
+    { path: '/settings/categories', name: 'categories', component: () => import('./views/CategoriesView.vue'), meta: { title: '分类管理' } },
   ],
 });

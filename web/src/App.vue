@@ -10,12 +10,6 @@ const activeMenu = computed(() => {
   if (route.path.startsWith('/project')) return route.params.id as string;
   return route.path;
 });
-
-const menuItems = [
-  { index: '/', icon: Folder, label: '项目管理' },
-  { index: '/search', icon: Search, label: '文档检索' },
-  { index: '/settings', icon: Setting, label: 'Provider 设置' },
-];
 </script>
 
 <template>
@@ -29,10 +23,22 @@ const menuItems = [
         :default-active="activeMenu" router class="app-menu"
         :collapse="collapsed" :collapse-transition="false"
       >
-        <el-menu-item v-for="m in menuItems" :key="m.index" :index="m.index">
-          <el-icon><component :is="m.icon" /></el-icon>
-          <template #title>{{ m.label }}</template>
+        <el-menu-item index="/">
+          <el-icon><Folder /></el-icon>
+          <template #title>项目管理</template>
         </el-menu-item>
+        <el-menu-item index="/search">
+          <el-icon><Search /></el-icon>
+          <template #title>文档检索</template>
+        </el-menu-item>
+        <el-sub-menu index="settings-group">
+          <template #title>
+            <el-icon><Setting /></el-icon>
+            <span>系统设置</span>
+          </template>
+          <el-menu-item index="/settings">Provider 设置</el-menu-item>
+          <el-menu-item index="/settings/categories">分类管理</el-menu-item>
+        </el-sub-menu>
       </el-menu>
       <div class="app-aside-footer">
         <el-tooltip :content="collapsed ? '展开菜单' : '收起菜单'" placement="right">

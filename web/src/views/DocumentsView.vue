@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { UploadRequestOptions } from 'element-plus';
-import { Search, Share, Setting, Upload } from '@element-plus/icons-vue';
+import { Search, Share, Upload } from '@element-plus/icons-vue';
 import PageHeader from '../components/PageHeader.vue';
 import { api, type DocCategory, type DocumentListResult, type DocumentSummary, type Project } from '../api';
 
@@ -30,14 +30,6 @@ const counts = ref<Record<string, number>>({});
 let keywordTimer: ReturnType<typeof setTimeout> | null = null;
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)));
-
-const TAG_COLORS = [
-  { value: 'primary', label: '主色' },
-  { value: 'success', label: '绿色' },
-  { value: 'info', label: '灰色' },
-  { value: 'warning', label: '橙色' },
-  { value: 'danger', label: '红色' },
-] as const;
 
 async function loadCategories() {
   try {
@@ -104,90 +96,6 @@ function onKeywordInput() {
     page.value = 1;
     load();
   }, 300);
-}
-
-// ---------- 分类管理 ----------
-
-const catDialog = ref(false);
-const newCatName = ref('');
-const newCatColor = ref('info');
-const catSaving = ref(false);
-
-async function addCategory() {
-  const name = newCatName.value.trim();
-  if (!name) {
-    ElMessage.warning('请输入分类名称');
-    return;
-  }
-  catSaving.value = true;
-  try {
-    await api('POST', '/api/doc-categories', { name, color: newCatColor.value });
-    newCatName.value = '';
-    ElMessage.success(`分类「${name}」已添加`);
-    await loadCategories();
-    load();
-  } catch (e) {
-    ElMessage.error((e as Error).message);
-  } finally {
-    catSaving.value = false;
-  }
-}
-
-async function renameCategory(row: DocCategory) {
-  let name: string;
-  try {
-    const r = await ElMessageBox.prompt(`修改分类「${row.name}」的名称`, '重命名分类', {
-      inputValue: row.name,
-      inputPattern: /\S+/,
-      inputErrorMessage: '名称不能为空',
-    });
-    name = (r.value ?? '').trim();
-  } catch { return; }
-  if (!name || name === row.name) return;
-  try {
-    await api('PATCH', `/api/doc-categories/${row.id}`, { name });
-    ElMessage.success('已重命名');
-    await loadCategories();
-    load();
-  } catch (e) {
-    ElMessage.error((e as Error).message);
-  }
-}
-
-async function changeColor(row: DocCategory, color: string) {
-  if (color === row.color) return;
-  try {
-    await api('PATCH', `/api/doc-categories/${row.id}`, { color });
-    ElMessage.success('标签色已更新');
-    await loadCategories();
-    load();
-  } catch (e) {
-    ElMessage.error((e as Error).message);
-  }
-}
-
-async function removeCategory(row: DocCategory) {
-  try {
-    await ElMessageBox.confirm(
-      `删除自定义分类「${row.name}」？该分类下的文档将自动归入「其他」。`,
-      '删除分类',
-      { type: 'warning' },
-    );
-  } catch { return; }
-  try {
-    await api<{ moved_documents: number }>('DELETE', `/api/doc-categories/${row.id}`);
-    ElMessage.success('分类已删除');
-    if (activeType.value === row.id) activeType.value = 'all';
-    await loadCategories();
-    load();
-  } catch (e) {
-    ElMessage.error((e as Error).message);
-  }
-}
-
-function openCatDialog() {
-  catDialog.value = true;
-  loadCategories();
 }
 
 /** 自定义上传：multipart POST，成功后刷新列表 */
@@ -293,7 +201,6 @@ onMounted(() => {
         style="width: 260px"
         @change="onDateRangeChange"
       />
-      <el-button :icon="Setting" @click="openCatDialog">管理分类</el-button>
       <el-input
         v-model="keywordInput"
         placeholder="按标题搜索"
@@ -360,51 +267,5 @@ onMounted(() => {
         @size-change="page = 1; load()"
       />
     </div>
-
-    <!-- 分类管理 -->
-    <el-dialog v-model="catDialog" title="分类管理" width="600px">
-      <el-table :data="categories" size="small" max-height="360">
-        <el-table-column prop="name" label="名称" min-width="140">
-          <template #default="{ row }">
-            <el-tag size="small" :type="docTypeTag(row.id)">{{ row.name }}</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="标签色" width="130">
-          <template #default="{ row }">
-            <el-select :model-value="row.color" size="small" @change="(v: string) => changeColor(row, v)">
-              <el-option v-for="c in TAG_COLORS" :key="c.value" :value="c.value" :label="c.label" />
-            </el-select>
-          </template>
-        </el-table-column>
-        <el-table-column label="内置" width="70">
-          <template #default="{ row }">
-            <el-tag v-if="row.built_in" size="small" type="warning">内置</el-tag>
-            <el-tag v-else size="small" type="info">自定义</el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="130">
-          <template #default="{ row }">
-            <el-button size="small" link type="primary" @click="renameCategory(row)">重命名</el-button>
-            <el-button v-if="!row.built_in" size="small" link type="danger" @click="removeCategory(row)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-      <div style="margin-top: 14px; display: flex; gap: 8px; align-items: center">
-        <el-input
-          v-model="newCatName"
-          placeholder="新分类名称（最多 30 字）"
-          maxlength="30"
-          style="width: 220px"
-          @keyup.enter="addCategory"
-        />
-        <el-select v-model="newCatColor" style="width: 110px">
-          <el-option v-for="c in TAG_COLORS" :key="c.value" :value="c.value" :label="c.label" />
-        </el-select>
-        <el-button type="primary" :loading="catSaving" @click="addCategory">添加分类</el-button>
-      </div>
-      <template #footer>
-        <el-button @click="catDialog = false">关闭</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>

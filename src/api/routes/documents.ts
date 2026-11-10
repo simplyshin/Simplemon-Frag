@@ -6,6 +6,7 @@ import {
   isKnownDocType,
   listCategories,
   updateCategory,
+  type DocCategory,
 } from '../../services/categories.js';
 import {
   addDocument,
@@ -27,7 +28,14 @@ import { scheduleRebuild } from '../../services/indexing.js';
 /** 分类管理（内置可改名/改色，自定义可增删；删除自定义分类时其下文档回落「其他」） */
 export function registerCategoryRoutes(app: FastifyInstance): void {
   app.get('/api/doc-categories', async () => {
-    return { items: listCategories(getDb()) };
+    // 附带各分类的未删除文档数（跨项目全局计数），供分类管理页展示与删除提示
+    const db = getDb();
+    const items = listCategories(db) as (DocCategory & { doc_count: number })[];
+    const rows = db.prepare(
+      'SELECT doc_type, COUNT(*) AS n FROM documents WHERE deleted_at IS NULL GROUP BY doc_type',
+    ).all() as { doc_type: string; n: number }[];
+    const counts = Object.fromEntries(rows.map((r) => [r.doc_type, r.n]));
+    return { items: items.map((c) => ({ ...c, doc_count: counts[c.id] ?? 0 })) };
   });
 
   app.post('/api/doc-categories', async (request, reply) => {

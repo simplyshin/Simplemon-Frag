@@ -41,6 +41,8 @@ export interface DocCategory {
   sort: number;
   built_in: number;
   created_at: string;
+  /** 未删除文档数（GET /api/doc-categories 附带，跨项目全局计数） */
+  doc_count?: number;
 }
 
 export interface DocumentListResult {
