@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { Refresh, Connection } from '@element-plus/icons-vue';
 import PageHeader from '../components/PageHeader.vue';
 import { api, type DocCategory, type DocumentFull } from '../api';
+import ForceGraph3D from '3d-force-graph';
+import * as THREE from 'three';
 
 /** 与后端 projectGraph 返回结构对应 */
 interface GraphNode {
@@ -13,14 +15,13 @@ interface GraphNode {
 }
 interface GraphEdge { source_id: string; target_id: string; type: string; score: number; reason: string }
 
-/** 模拟布局中的节点（含坐标与速度） */
-interface SimNode extends GraphNode { x: number; y: number; vx: number; vy: number }
+/** 3D 图节点对象（持久持有：过滤切换时保留坐标，避免整图重排） */
+interface Node3D extends GraphNode { color: string; val: number; x: number; y: number; z: number }
 
 const route = useRoute();
 const projectId = route.params.id as string;
 
-const W = 1100, H = 760;
-const nodes = ref<SimNode[]>([]);
+const nodes = ref<GraphNode[]>([]);
 const edges = ref<GraphEdge[]>([]);
 const categories = ref<DocCategory[]>([]);
 const loading = ref(false);
@@ -34,9 +35,9 @@ const activeId = computed(() => selectedId.value ?? hoverId.value);
 const threshold = ref(0.85);
 /** 每节点最多显示的最强关联数；0 = 不限（边降噪核心手段） */
 const topK = ref(4);
-/** 标签显示模式：key=重点节点（Top 关联数/悬浮/邻居） all=全部 none=隐藏 */
+/** 标签显示模式：key=重点节点（Top 关联数/锁定） all=全部 none=隐藏 */
 const labelMode = ref<'key' | 'all' | 'none'>('key');
-/** 完整文件名开关：关闭时截断 12 字，悬浮/关联节点始终完整 */
+/** 完整文件名开关：关闭时截断 12 字 */
 const showFullNames = ref(false);
 /** 隐藏的分类 id 列表（图例点击过滤） */
 const hiddenCats = ref<string[]>([]);
@@ -49,16 +50,13 @@ const FALLBACK_PALETTE = ['#409eff', '#67c23a', '#e6a23c', '#f56c6c', '#9c66e8',
 const FALLBACK_NAME = '未分类';
 
 const catOf = (t: string) => categories.value.find((c) => c.id === t);
-/** 分类显示名；未知分类回退"未分类" */
 const catName = (t: string) => catOf(t)?.name ?? FALLBACK_NAME;
-/** 分类色：hex 直用，预设枚举映射 hex，未知分类取兜底色板 */
 const catColor = (t: string) => {
   const c = catOf(t);
   if (!c) return FALLBACK_PALETTE[0];
   if (c.color.startsWith('#')) return c.color;
   return PRESET_HEX[c.color] ?? '#909399';
 };
-const nodeCat = (n: SimNode) => n.doc_type || 'other';
 
 /** 阈值过滤 + 每节点 Top-K 截断（边已按分数降序） */
 const shownEdges = computed(() => {
@@ -77,12 +75,8 @@ const shownEdges = computed(() => {
   return kept;
 });
 
-/** 可见节点（图例过滤掉被隐藏分类） */
-const visibleNodes = computed(() => nodes.value.filter((n) => !hiddenCats.value.includes(nodeCat(n))));
-const visibleIds = computed(() => new Set(visibleNodes.value.map((n) => n.id)));
-
 interface RelatedItem {
-  node: SimNode;
+  node: GraphNode;
   edge: GraphEdge;
   preview: string;
   previewLoading: boolean;
@@ -92,65 +86,26 @@ interface RelatedItem {
 const relatedItems = ref<RelatedItem[]>([]);
 
 const selectedNode = computed(() => nodes.value.find((n) => n.id === activeId.value) ?? null);
-
 const nodeById = computed(() => new Map(nodes.value.map((n) => [n.id, n])));
 
-/** 边渲染数据（含坐标）：两端节点都可见才绘制 */
-const edgeLines = computed(() =>
-  shownEdges.value
-    .map((e) => {
-      if (!visibleIds.value.has(e.source_id) || !visibleIds.value.has(e.target_id)) return null;
-      const s = nodeById.value.get(e.source_id);
-      const t = nodeById.value.get(e.target_id);
-      if (!s || !t) return null;
-      const active = !activeId.value || e.source_id === activeId.value || e.target_id === activeId.value;
-      return { ...e, x1: s.x, y1: s.y, x2: t.x, y2: t.y, active };
-    })
-    .filter((e): e is NonNullable<typeof e> => e !== null),
-);
-
-const edgeColor = (type: string) => (type === 'manual' ? '#e6a23c' : '#409eff');
-const edgeOpacity = (e: { score: number; active: boolean }) =>
-  activeId.value ? (e.active ? 0.85 : 0.05) : 0.1 + e.score * 0.4;
-
-/** 曲线边：二次贝塞尔（弧度代替直线，减少交叉重叠感） */
-const edgePath = (e: { x1: number; y1: number; x2: number; y2: number }) => {
-  const mx = (e.x1 + e.x2) / 2, my = (e.y1 + e.y2) / 2;
-  const dx = e.x2 - e.x1, dy = e.y2 - e.y1;
-  return `M${e.x1},${e.y1} Q${mx - dy * 0.15},${my + dx * 0.15} ${e.x2},${e.y2}`;
-};
-
-const nodeRadius = (n: SimNode) => Math.min(7 + n.link_count * 1.2, 16);
-/** 节点色 = 分类色；聚焦时邻居保持分类色、其余淡化 */
-const nodeFill = (n: SimNode) => (n.id === activeId.value ? '#f56c6c' : catColor(nodeCat(n)));
-const nodeOpacity = (n: SimNode) =>
-  !activeId.value ? 0.92 : n.id === activeId.value || isConnectedTo(n.id) ? 1 : 0.15;
-
-function isConnectedTo(id: string): boolean {
-  if (!activeId.value) return false;
-  return shownEdges.value.some(
-    (e) => (e.source_id === activeId.value && e.target_id === id)
-        || (e.target_id === activeId.value && e.source_id === id),
-  );
+/** 悬浮/锁定节点的可见邻居集合（用于淡化非邻居与边高亮） */
+const neighborIds = ref<Set<string>>(new Set());
+function rebuildNeighbors(id: string | null) {
+  const set = new Set<string>();
+  if (id) {
+    for (const e of shownEdges.value) {
+      if (e.source_id === id) set.add(e.target_id);
+      else if (e.target_id === id) set.add(e.source_id);
+    }
+  }
+  neighborIds.value = set;
 }
 
-/** 重点节点：关联数 Top15（聚簇布局下标签仍然稀缺，只标注枢纽节点） */
-const topDegreeIds = computed(() =>
-  new Set([...nodes.value].sort((a, b) => b.link_count - a.link_count).slice(0, 15).map((n) => n.id)),
-);
-const showLabel = (n: SimNode) =>
-  labelMode.value === 'all'
-  || (labelMode.value === 'key'
-    && (n.id === activeId.value || isConnectedTo(n.id) || topDegreeIds.value.has(n.id)));
-
-/** 节点标签：完整名开关关闭时截断 12 字；当前高亮/关联节点始终完整 */
-const label = (n: SimNode) =>
-  showFullNames.value || n.id === activeId.value || isConnectedTo(n.id)
-    ? n.title
-    : (n.title.length > 12 ? n.title.slice(0, 11) + '…' : n.title);
+const relatedCount = computed(() => edges.value.length);
 
 // ---------- 高亮联动：activeId 变化即重建右侧关联面板（悬浮预览 / 点击锁定共用） ----------
 watch(activeId, (id) => {
+  rebuildNeighbors(id);
   relatedItems.value = [];
   if (!id) return;
   relatedItems.value = edges.value
@@ -166,10 +121,191 @@ watch(activeId, (id) => {
     .sort((a, b) => b.edge.score - a.edge.score);
 });
 
-/** 点击节点：已锁定则取消，否则锁定（拖拽后不触发） */
-function toggleSelect(node: SimNode) {
-  if (dragMoved) return;
-  selectedId.value = selectedId.value === node.id ? null : node.id;
+// ---------- 3D 图（3d-force-graph + three） ----------
+const containerRef = ref<HTMLDivElement | null>(null);
+let graph: any = null;
+let resizeOb: ResizeObserver | null = null;
+let nodeObjs: Node3D[] = [];
+let needFit = false;
+/** 分类聚簇引力中心（斐波那契球面分布） */
+let catCenters: Record<string, { x: number; y: number; z: number }> = {};
+
+const NODE_REL_SIZE = 3;
+const radiusOf = (val: number) => Math.cbrt(Math.max(0, val)) * NODE_REL_SIZE;
+
+/** d3 在模拟初始化后会把 link.source/target 替换为节点对象，取 id 时兼容两种形态 */
+const nid = (s: any) => (typeof s === 'object' && s !== null ? s.id : s);
+
+const escapeHtml = (s: string) =>
+  s.replace(/[&<>"']/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch] as string));
+
+// ---- 访问器（读取当前响应式状态；状态变化后重新 setter 触发刷新） ----
+const nodeColorFn = (n: Node3D) => {
+  const base = n.id === selectedId.value ? '#f56c6c' : n.color;
+  if (!activeId.value) return base;
+  return n.id === activeId.value || neighborIds.value.has(n.id) ? base : dimHex(base, 0.12);
+};
+const isLinkActive = (l: any) =>
+  !activeId.value || nid(l.source) === activeId.value || nid(l.target) === activeId.value;
+const linkColorFn = (l: any) => {
+  if (activeId.value) return isLinkActive(l) ? (l.type === 'manual' ? '#e6a23c' : '#409eff') : '#909399';
+  return l.type === 'manual' ? '#e6a23c' : '#409eff';
+};
+const linkOpacityFn = (l: any) =>
+  activeId.value ? (isLinkActive(l) ? 0.85 : 0.03) : 0.1 + l.score * 0.35;
+const linkWidthFn = (l: any) =>
+  activeId.value ? (isLinkActive(l) ? 3 : 0.4) : 0.5 + l.score * 1.2;
+
+/** hex → rgba 淡化 */
+function dimHex(hex: string, alpha: number) {
+  const h = hex.replace('#', '');
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
+
+/** 重点节点：关联数 Top15 + 锁定节点 */
+const topDegreeIds = computed(() =>
+  new Set([...nodes.value].sort((a, b) => b.link_count - a.link_count).slice(0, 15).map((n) => n.id)),
+);
+const showLabel = (n: Node3D) =>
+  labelMode.value === 'all'
+  || (labelMode.value === 'key' && (topDegreeIds.value.has(n.id) || n.id === selectedId.value));
+
+/** 标签精灵：canvas 文字纹理，挂在默认球体下方（nodeThreeObjectExtend 模式） */
+function makeLabelSprite(n: Node3D): THREE.Object3D {
+  if (!showLabel(n)) return new THREE.Object3D();
+  const full = showFullNames.value || n.id === selectedId.value;
+  const text = full ? n.title : (n.title.length > 12 ? n.title.slice(0, 11) + '…' : n.title);
+  const fontSize = 64;
+  const canvas = document.createElement('canvas');
+  let ctx = canvas.getContext('2d')!;
+  const font = `${fontSize}px "Microsoft YaHei", sans-serif`;
+  ctx.font = font;
+  canvas.width = Math.ceil(ctx.measureText(text).width) + 24;
+  canvas.height = Math.round(fontSize * 1.5);
+  ctx = canvas.getContext('2d')!;
+  ctx.font = font;
+  ctx.fillStyle = n.id === selectedId.value ? '#f56c6c' : 'rgba(48, 49, 51, 0.95)';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, 12, canvas.height / 2);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, transparent: true, depthWrite: false }));
+  const s = 0.09;
+  sprite.scale.set(canvas.width * s, canvas.height * s, 1);
+  sprite.position.set(0, -(radiusOf(n.val) + 2.6), 0);
+  return sprite;
+}
+
+/** 悬浮 HTML 提示 */
+const nodeTooltip = (n: Node3D) => `
+  <div style="max-width:320px;padding:8px 10px;border-radius:6px;background:#fff;box-shadow:0 2px 12px rgba(0,0,0,.18);font-size:12px;color:#303133">
+    <b>${escapeHtml(n.title)}</b><br/>
+    <span style="color:#909399">${escapeHtml(catName(n.doc_type))} · v${n.version_no} · 关联 ${n.link_count} 篇 · 点击锁定</span>
+  </div>`;
+
+/** 分类引力中心：按分类节点数降序，斐波那契球面分布 */
+function computeCenters() {
+  const counts = new Map<string, number>();
+  for (const n of nodeObjs) counts.set(n.doc_type, (counts.get(n.doc_type) ?? 0) + 1);
+  const catList = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([c]) => c);
+  catCenters = {};
+  const R = 180;
+  catList.forEach((c, i) => {
+    const phi = Math.acos(1 - (2 * (i + 0.5)) / catList.length);
+    const theta = Math.PI * (1 + Math.sqrt(5)) * i;
+    catCenters[c] = {
+      x: R * Math.sin(phi) * Math.cos(theta),
+      y: R * Math.sin(phi) * Math.sin(theta),
+      z: R * Math.cos(phi),
+    };
+  });
+}
+
+function initGraph() {
+  const el = containerRef.value;
+  if (!el || graph) return;
+  graph = ForceGraph3D()(el)
+    .backgroundColor('#fafbfd')
+    .showNavInfo(false)
+    .nodeRelSize(NODE_REL_SIZE)
+    .nodeVal((n: Node3D) => n.val)
+    .nodeColor(nodeColorFn)
+    .nodeLabel(nodeTooltip)
+    .nodeThreeObjectExtend(true)
+    .nodeThreeObject(makeLabelSprite)
+    .linkColor(linkColorFn)
+    .linkOpacity(linkOpacityFn)
+    .linkWidth(linkWidthFn)
+    .onNodeHover((n: Node3D | null) => { hoverId.value = n?.id ?? null; })
+    .onClick((n: Node3D | null) => {
+      if (n) selectedId.value = selectedId.value === n.id ? null : n.id;
+      else deselect();
+    })
+    .onEngineStop(() => {
+      if (needFit) {
+        needFit = false;
+        graph.zoomToFit(500, 60);
+      }
+    });
+  graph.d3Force('charge')?.strength(-110);
+  graph.d3Force('link')?.distance(60);
+  // 分类聚簇力：节点向各自分类中心持续微拉（与关联弹簧力共同作用）
+  graph.d3Force('cluster', (alpha: number) => {
+    for (const n of graph.graphData().nodes as Node3D[]) {
+      const c = catCenters[n.doc_type];
+      if (!c) continue;
+      n.vx += (c.x - n.x) * alpha * 2;
+      n.vy += (c.y - n.y) * alpha * 2;
+      n.vz += (c.z - n.z) * alpha * 2;
+    }
+  });
+  graph.width(el.clientWidth || 800).height(el.clientHeight || 600);
+  resizeOb = new ResizeObserver(() => {
+    if (!graph || !containerRef.value) return;
+    graph.width(containerRef.value.clientWidth || 800).height(containerRef.value.clientHeight || 600);
+  });
+  resizeOb.observe(el);
+}
+
+function refreshAppearance() {
+  if (!graph) return;
+  graph.nodeColor(nodeColorFn);
+  graph.linkColor(linkColorFn);
+  graph.linkOpacity(linkOpacityFn);
+  graph.linkWidth(linkWidthFn);
+}
+
+function refreshLabels() {
+  if (!graph) return;
+  graph.nodeThreeObject(makeLabelSprite);
+}
+
+/** 依据当前过滤条件重建图数据（节点对象持久复用 → 坐标保留） */
+function rebuildGraph() {
+  if (!graph) return;
+  const vis = nodeObjs.filter((n) => !hiddenCats.value.includes(n.doc_type));
+  const visIds = new Set(vis.map((n) => n.id));
+  const links = shownEdges.value
+    .filter((e) => visIds.has(e.source_id) && visIds.has(e.target_id))
+    .map((e) => ({ source: e.source_id, target: e.target_id, score: e.score, type: e.type, reason: e.reason }));
+  graph.graphData({ nodes: vis, links });
+  needFit = true;
+  graph.d3ReheatSimulation();
+}
+
+watch(activeId, () => refreshAppearance());
+watch(selectedId, () => refreshLabels());
+watch([threshold, topK], () => rebuildGraph());
+watch(labelMode, () => refreshLabels());
+watch(showFullNames, () => refreshLabels());
+watch(hiddenCats, () => rebuildGraph());
+
+function deselect() {
+  selectedId.value = null;
+  hoverId.value = null;
 }
 
 // ---------- 分类图例过滤 ----------
@@ -177,7 +313,7 @@ interface LegendItem { id: string; name: string; color: string; count: number }
 const legendItems = computed<LegendItem[]>(() => {
   const counts = new Map<string, number>();
   for (const n of nodes.value) {
-    const c = nodeCat(n);
+    const c = n.doc_type || 'other';
     counts.set(c, (counts.get(c) ?? 0) + 1);
   }
   return [...counts.entries()]
@@ -187,116 +323,9 @@ const legendItems = computed<LegendItem[]>(() => {
 
 function toggleCat(id: string) {
   const i = hiddenCats.value.indexOf(id);
-  if (i >= 0) hiddenCats.value.splice(i, 1);
-  else hiddenCats.value.push(id);
-}
-
-// ---------- 节点拖拽：手动整理布局 ----------
-const svgRef = ref<SVGSVGElement | null>(null);
-let dragNode: SimNode | null = null;
-let dragMoved = false;
-
-/** 屏幕坐标 → viewBox 坐标（preserveAspectRatio meet 含留白换算） */
-function toSvgPoint(evt: MouseEvent): { x: number; y: number } | null {
-  const svg = svgRef.value;
-  if (!svg) return null;
-  const rect = svg.getBoundingClientRect();
-  const scale = Math.min(rect.width / W, rect.height / H);
-  const ox = (rect.width - W * scale) / 2;
-  const oy = (rect.height - H * scale) / 2;
-  return { x: (evt.clientX - rect.left - ox) / scale, y: (evt.clientY - rect.top - oy) / scale };
-}
-
-function onNodeDown(node: SimNode, evt: MouseEvent) {
-  dragNode = node;
-  dragMoved = false;
-  evt.preventDefault();
-}
-
-function onSvgMove(evt: MouseEvent) {
-  if (!dragNode) return;
-  const p = toSvgPoint(evt);
-  if (!p) return;
-  dragMoved = true;
-  dragNode.x = Math.max(60, Math.min(W - 60, p.x));
-  dragNode.y = Math.max(40, Math.min(H - 40, p.y - 14));
-  dragNode.vx = 0;
-  dragNode.vy = 0;
-}
-
-function onSvgUp() {
-  dragNode = null;
-}
-
-// ---------- 力导向布局（分类聚簇版）：同分类节点向自己的"分类引力中心"聚拢 ----------
-function layout(seedJitter = false) {
-  const n = nodes.value.length;
-  if (!n) return;
-
-  // 每个分类一个虚拟引力中心：按分类节点数降序环形排布 → 形成色彩分区
-  const catList = [...legendItems.value.map((l) => l.id)];
-  if (!catList.includes('other') && nodes.value.some((nd) => nodeCat(nd) === 'other')) catList.push('other');
-  const R = Math.min(W, H) * 0.30;
-  const centers = new Map<string, { x: number; y: number }>();
-  catList.forEach((c, i) => {
-    const angle = (2 * Math.PI * i) / catList.length - Math.PI / 2;
-    centers.set(c, { x: W / 2 + R * Math.cos(angle), y: H / 2 + R * 0.75 * Math.sin(angle) });
-  });
-
-  // 初始位置：围绕各自分类中心散布（抖动避免完全对称）
-  const perCatIdx = new Map<string, number>();
-  nodes.value.forEach((node) => {
-    const c = nodeCat(node);
-    const k = perCatIdx.get(c) ?? 0;
-    perCatIdx.set(c, k + 1);
-    const center = centers.get(c) ?? { x: W / 2, y: H / 2 };
-    const angle = (2 * Math.PI * k) / 8 + (k % 3) * 0.9;
-    const r = 30 + (k % 5) * 22 + (seedJitter ? Math.random() * 30 : 0);
-    node.x = Math.max(50, Math.min(W - 50, center.x + r * Math.cos(angle)));
-    node.y = Math.max(40, Math.min(H - 40, center.y + r * 0.8 * Math.sin(angle)));
-    node.vx = 0; node.vy = 0;
-  });
-
-  const repulsion = 36000;      // 节点间斥力
-  const spring = 0.012;         // 关联边弹簧刚度
-  const restLen = 170;          // 关联边理想长度
-  const clusterGravity = 0.05;  // 向各自分类中心的引力（聚簇强度）
-  const damping = 0.85;
-
-  for (let iter = 0; iter < 300; iter++) {
-    for (let i = 0; i < n; i++) {
-      const a = nodes.value[i];
-      for (let j = i + 1; j < n; j++) {
-        const b = nodes.value[j];
-        let dx = a.x - b.x, dy = a.y - b.y;
-        let dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
-        const force = repulsion / (dist * dist);
-        dx /= dist; dy /= dist;
-        a.vx += dx * force; a.vy += dy * force;
-        b.vx -= dx * force; b.vy -= dy * force;
-      }
-    }
-    // 相关节点互相吸引（弹簧）
-    for (const e of shownEdges.value) {
-      const s = nodeById.value.get(e.source_id);
-      const t = nodeById.value.get(e.target_id);
-      if (!s || !t) continue;
-      const dx = t.x - s.x, dy = t.y - s.y;
-      const dist = Math.sqrt(dx * dx + dy * dy) || 0.01;
-      const force = spring * (dist - restLen);
-      const fx = (dx / dist) * force, fy = (dy / dist) * force;
-      s.vx += fx; s.vy += fy;
-      t.vx -= fx; t.vy -= fy;
-    }
-    for (const node of nodes.value) {
-      const center = centers.get(nodeCat(node)) ?? { x: W / 2, y: H / 2 };
-      node.vx += (center.x - node.x) * clusterGravity;
-      node.vy += (center.y - node.y) * clusterGravity;
-      node.vx *= damping; node.vy *= damping;
-      node.x = Math.max(50, Math.min(W - 50, node.x + node.vx));
-      node.y = Math.max(40, Math.min(H - 40, node.y + node.vy));
-    }
-  }
+  hiddenCats.value = i >= 0
+    ? hiddenCats.value.filter((c) => c !== id)
+    : [...hiddenCats.value, id];
 }
 
 /** 展开/收起关联文档内容；首次展开时才拉取正文 */
@@ -313,12 +342,7 @@ async function toggleExpand(item: RelatedItem) {
   item.previewLoading = false;
 }
 
-function deselect() {
-  selectedId.value = null;
-  hoverId.value = null;
-}
-
-async function load(seedJitter = false) {
+async function load() {
   loading.value = true;
   deselect();
   try {
@@ -328,9 +352,24 @@ async function load(seedJitter = false) {
     ]);
     categories.value = cats.items;
     edges.value = g.edges;
-    nodes.value = g.nodes.map((n) => ({ ...n, doc_type: n.doc_type || 'other', x: 0, y: 0, vx: 0, vy: 0 }));
+    nodes.value = g.nodes.map((n) => ({ ...n, doc_type: n.doc_type || 'other' }));
     hiddenCats.value = [];
-    layout(seedJitter);
+    // 构建持久节点对象（颜色/尺寸/初始位置：分类中心附近散布）
+    nodeObjs = nodes.value.map((n) => ({
+      ...n,
+      color: catColor(n.doc_type),
+      val: 2 + Math.min(n.link_count * 1.2, 40),
+      x: 0, y: 0, z: 0,
+    }));
+    computeCenters();
+    nodeObjs.forEach((n) => {
+      const c = catCenters[n.doc_type] ?? { x: 0, y: 0, z: 0 };
+      n.x = c.x + (Math.random() - 0.5) * 90;
+      n.y = c.y + (Math.random() - 0.5) * 90;
+      n.z = c.z + (Math.random() - 0.5) * 90;
+    });
+    initGraph();
+    rebuildGraph();
     if (!g.nodes.length) ElMessage.info('项目暂无文档');
   } catch (e) {
     ElMessage.error((e as Error).message);
@@ -339,7 +378,16 @@ async function load(seedJitter = false) {
   }
 }
 
-const relatedCount = computed(() => edges.value.length);
+/** 重新布局：重掷初始位置（围绕分类中心）并重新模拟 */
+function relayout() {
+  nodeObjs.forEach((n) => {
+    const c = catCenters[n.doc_type] ?? { x: 0, y: 0, z: 0 };
+    n.x = c.x + (Math.random() - 0.5) * 110;
+    n.y = c.y + (Math.random() - 0.5) * 110;
+    n.z = c.z + (Math.random() - 0.5) * 110;
+  });
+  rebuildGraph();
+}
 
 /** 项目级重建自动关联：全部文档两两重算（评分 = 质心×0.5 + 最大段落相似度×0.5） */
 const rebuilding = ref(false);
@@ -359,14 +407,23 @@ async function rebuildLinks() {
 }
 
 onMounted(() => load());
+
+onBeforeUnmount(() => {
+  resizeOb?.disconnect();
+  resizeOb = null;
+  if (graph) {
+    try { graph._destructor(); } catch { /* 忽略销毁异常 */ }
+    graph = null;
+  }
+});
 </script>
 
 <template>
   <!-- 整页适配视口高度：头部/图例固定，中间区域弹性占满，内部各自滚动 -->
   <div style="height: 100%; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden">
-    <PageHeader title="关联拓扑" style="flex-shrink: 0">
+    <PageHeader title="关联拓扑（3D）" style="flex-shrink: 0">
       <el-button :icon="Connection" :loading="rebuilding" @click="rebuildLinks">重建关联</el-button>
-      <el-button :icon="Refresh" @click="load(true)">重新布局</el-button>
+      <el-button :icon="Refresh" @click="relayout">重新布局</el-button>
     </PageHeader>
     <div class="page-body" style="margin-bottom: 10px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap">
       <span style="color: var(--el-text-color-secondary); font-size: 13px">
@@ -424,55 +481,10 @@ onMounted(() => load());
         shadow="never" style="flex: 1; min-width: 0; height: 100%; overflow: hidden"
         :body-style="{ padding: '0', height: '100%' }" v-loading="loading"
       >
-        <svg
-          ref="svgRef"
-          :viewBox="`0 0 ${W} ${H}`" style="width: 100%; height: 100%; display: block; background: #fafbfd"
-          preserveAspectRatio="xMidYMid meet"
-          @click.self="deselect"
-          @mousemove="onSvgMove"
-          @mouseup="onSvgUp"
-          @mouseleave="onSvgUp"
-        >
-          <!-- 关联边（曲线，弧度减少交叉重叠感） -->
-          <path
-            v-for="(e, i) in edgeLines" :key="`e${i}`"
-            :d="edgePath(e)" fill="none"
-            :stroke="edgeColor(e.type)" :stroke-opacity="edgeOpacity(e)"
-            :stroke-width="activeId ? (e.active ? 1.5 + e.score * 2 : 1) : 1 + e.score * 2"
-          >
-            <title>{{ e.reason }}</title>
-          </path>
-          <!-- 节点：分类着色聚簇；悬浮预览选中，点击锁定/再点取消，可拖拽整理 -->
-          <g
-            v-for="n in visibleNodes" :key="n.id"
-            style="cursor: pointer"
-            @mouseenter="hoverId = n.id"
-            @mouseleave="hoverId = null"
-            @mousedown="onNodeDown(n, $event)"
-            @click.stop="toggleSelect(n)"
-          >
-            <circle
-              :cx="n.x" :cy="n.y" :r="nodeRadius(n)"
-              :fill="nodeFill(n)" :fill-opacity="nodeOpacity(n)"
-              :stroke="n.id === activeId ? '#f56c6c' : '#fff'"
-              :stroke-width="n.id === activeId ? 2.5 : 1.5"
-              :stroke-opacity="nodeOpacity(n)"
-            />
-            <text
-              v-if="showLabel(n)"
-              :x="n.x" :y="n.y + nodeRadius(n) + 13"
-              text-anchor="middle" font-size="11"
-              :fill="n.id === activeId ? '#f56c6c' : '#303133'"
-              :font-weight="n.id === activeId || isConnectedTo(n.id) ? '700' : '400'"
-              :opacity="nodeOpacity(n)"
-              style="pointer-events: none"
-            >{{ label(n) }}</text>
-            <title>{{ catName(nodeCat(n)) }} · {{ n.title }}（关联 {{ n.link_count }} 篇；可拖拽调整位置）</title>
-          </g>
-        </svg>
+        <div ref="containerRef" style="width: 100%; height: 100%" />
       </el-card>
 
-      <!-- 关联面板常驻固定宽度：避免出现/消失引起 SVG 布局抖动（悬浮回环闪烁） -->
+      <!-- 关联面板常驻固定宽度：悬浮/点击锁定共用 -->
       <el-card
         shadow="never"
         style="width: 380px; flex-shrink: 0; height: 100%; display: flex; flex-direction: column; overflow: hidden"
@@ -485,11 +497,11 @@ onMounted(() => load());
           </div>
         </template>
         <template v-if="!selectedNode">
-          <el-empty description="悬浮节点预览关联，点击锁定" :image-size="60" />
+          <el-empty description="悬浮节点预览关联，点击锁定；左键旋转 / 滚轮缩放 / 右键平移" :image-size="60" />
         </template>
         <template v-else>
           <p style="margin: 0 0 12px; font-size: 12px; color: var(--el-text-color-secondary)">
-            {{ catName(nodeCat(selectedNode)) }} · v{{ selectedNode.version_no }} · 关联 {{ relatedItems.length }} 篇
+            {{ catName(selectedNode.doc_type || 'other') }} · v{{ selectedNode.version_no }} · 关联 {{ relatedItems.length }} 篇
           </p>
           <el-empty v-if="!relatedItems.length" description="该文档暂无关联文档" :image-size="60" />
           <div v-for="item in relatedItems" :key="item.node.id" style="margin-bottom: 14px">
@@ -521,7 +533,7 @@ onMounted(() => load());
       图例：<span style="color: #409eff">━</span> 自动关联（向量相似）
       <span style="color: #e6a23c; margin-left: 12px">━</span> 手动关联
       节点颜色 = 文档分类（同色聚簇）；节点大小 = 关联数量；
-      悬浮聚焦邻居 / 点击锁定 / 拖拽整理；「每节点前 K 强」+ 阈值滑杆可逐步降噪。
+      鼠标左键旋转 / 滚轮缩放 / 右键平移；悬浮聚焦邻居 / 点击锁定；「每节点前 K 强」+ 阈值滑杆可逐步降噪。
     </div>
   </div>
 </template>
