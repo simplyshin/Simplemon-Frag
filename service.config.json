@@ -1,0 +1,22 @@
+{
+  "service": {
+    "name": "FragMcpServer",
+    "displayName": "frag-mcp 项目文档管理服务",
+    "description": "自托管项目知识库 MCP 服务（文档管理/语义检索/归档）",
+    "startup": "auto"
+  },
+  "server": {
+    "mode": "web",
+    "script": "dist/server.js",
+    "port": 3210,
+    "nodePath": "C:\\Program Files\\nodejs\\node.exe",
+    "nodeOptions": [],
+    "env": {}
+  },
+  "daemon": {
+    "manager": "auto",
+    "logDir": "logs",
+    "logRotationMB": 10,
+    "healthTimeoutSec": 30
+  }
+}

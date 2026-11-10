@@ -36,11 +36,42 @@ node dist/server.js              # HTTP 模式（默认，端口 3210）
 node dist/server.js --stdio      # stdio 模式（Codex 等客户端用，不启动 Web）
 node dist/server.js --stdio --web  # stdio 模式 + 同进程内嵌 Web 后台（也可配置 server.webInStdio=true）
 
+#    Windows 上长期运行推荐用服务管理脚本（后台启动 / 安装为系统服务）：
+#    node service.mjs start  /  node service.mjs install
+#    见下方「后台运行与 Windows 服务」
+
 # 5. 验证
 curl http://localhost:3210/health
 ```
 
 Web 后台：浏览器打开 `http://localhost:3210` 即可（本机 `/api` 免 token）。
+
+### 后台运行与 Windows 服务（service.mjs）
+
+长期运行不必把服务挂在终端上，用根目录的管理脚本统一管理（启动模式在 `service.config.json` 的 `server.mode` 配置为 `web` / `stdio` / `stdio-web`）：
+
+```bash
+node service.mjs doctor     # 环境自检（Node 版本/构建产物/AUTH_TOKEN/原生模块 ABI/服务管理器）
+node service.mjs start      # 后台启动（无需管理员；日志落 logs/service.log，PID 文件管理）
+node service.mjs status     # 运行状态 + /health 健康检查
+node service.mjs stop       # 停止（终止整个进程树）
+node service.mjs restart    # 重启
+node service.mjs logs 100   # 查看最近 100 行日志
+node service.mjs run        # 前台调试运行（Ctrl+C 停止）
+
+# 安装为 Windows 服务（需「以管理员身份运行」的终端；装完自动启动）
+node service.mjs install    # 开机自启 + 崩溃 5 秒自动重启 + 日志轮转
+node service.mjs uninstall  # 卸载
+```
+
+要点：
+
+- **服务后端**：`daemon.manager` 可选 `nssm`（PATH 或 `tools/nssm/`）或 `winsw`；`auto` 时优先 NSSM，未安装则自动从 GitHub（含镜像）下载 WinSW 到 `tools/winsw/`
+- **`server.nodePath`**：多 Node 版本共存、原生模块（better-sqlite3）ABI 不匹配时，用它指定兼容的 node.exe，留空则用执行脚本的 node；`doctor` 会自动探测
+- **端口预检**：`start` 前探测 `/health`，发现已有实例在响应会拒绝启动，避免双进程共用 `data/` 触发 `SQLITE_BUSY`
+- 纯 `stdio` 模式通常由 AI 客户端以子进程拉起，作为常驻后台/服务建议用 `web` 或 `stdio-web`
+
+完整说明见 [部署指南_HTTP多人使用.md](./部署指南_HTTP多人使用.md) 的「进程守护」一节。
 
 ## 三、AI 客户端接入
 
@@ -143,6 +174,7 @@ Web 后台（同端口 3210），浏览器可直接管理文档——与 MCP 同
 ## 六、配置
 
 优先级：环境变量 > `data/config.json` > 内置默认值。
+端口例外：`service.config.json` 的 `server.port` 若显式设置，优先于 `.env` 的 `PORT`（仅服务管理脚本启动的进程受此影响）。
 
 | 配置项 | 位置 | 说明 |
 |---|---|---|
@@ -152,6 +184,7 @@ Web 后台（同端口 3210），浏览器可直接管理文档——与 MCP 同
 | LLM Provider | Web 设置页 / `data/config.json` | openai / anthropic / deepseek / zhipu 预置；key 放 `.env` 对应变量名；**不配置也能用**（生成降级为机械聚合） |
 | Embedding | Web 设置页 / `data/config.json` | 默认 `local`（bge-small-zh-v1.5，512 维，零 key）；可切 `openai-compatible`；切换模型自动重建向量表 |
 | 分块 | `data/config.json` | maxTokens=800 / overlap=100 |
+| 服务管理 | `service.config.json` | `service.mjs` 专用：`server.mode` 启动模式（web/stdio/stdio-web）、`server.port`、`server.nodePath`（指定 node.exe，多版本/ABI 不匹配时）、`service.*`（服务名/开机自启）、`daemon.manager`（nssm/winsw/auto）、`daemon.logDir` 与日志轮转 |
 
 ## 七、测试与验收脚本
 
@@ -191,6 +224,10 @@ rag/
 │  └─ llm/            # LLM / Embedding Provider 抽象（local 默认 + openai-compatible）
 ├─ web/               # Vue 3 + Vite + Element Plus 后台（npm run build 后由服务托管）
 ├─ data/              # 运行时数据（doc.db、models/、config.json）——勿提交 git
+├─ service.mjs        # 服务管理脚本（后台启动/停止/Windows 服务安装卸载）
+├─ service.config.json# 服务管理配置（启动模式/端口/node 路径/服务后端）
+├─ logs/              # service.mjs 托管的运行日志（service.log，按大小轮转）——勿提交 git
+├─ tools/             # 服务包装器（WinSW 自动下载 / NSSM 手动放置）——勿提交 git
 ├─ scripts/           # 冒烟/验收/演示数据脚本
 └─ tests/             # vitest 集成测试（内存库）
 ```

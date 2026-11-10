@@ -11,6 +11,11 @@ describe('inferDocType 关键词规则', () => {
     expect(inferDocType('TCP/IP 协议说明')).toBe('tech');
     expect(inferDocType('HTTPS 接口协议文档')).toBe('tech');
     expect(inferDocType('系统通信协议设计')).toBe('tech');
+    // 通讯协议 / MODBUS / 协议解析等技术语境不再误判为合同
+    expect(inferDocType('跟踪器MODBUS通讯协议')).toBe('tech');
+    expect(inferDocType('设备通讯协议文档_最新版')).toBe('tech');
+    expect(inferDocType('协议解析模块设计概要')).toBe('tech');
+    expect(inferDocType('跟踪器通讯协议待确认问题清单')).toBe('tech');
   });
 
   it('裸「协议」默认合同语境', () => {
@@ -23,6 +28,9 @@ describe('inferDocType 关键词规则', () => {
     expect(inferDocType('需求变更记录')).toBe('adjustment');
     expect(inferDocType('代码调整说明')).toBe('adjustment');
     expect(inferDocType('接口修订历史')).toBe('adjustment');
+    expect(inferDocType('缺陷修复-设备ID下发失败R01')).toBe('adjustment');
+    expect(inferDocType('快速改进-蓝牙连接状态文字R07')).toBe('adjustment');
+    expect(inferDocType('新增功能-配置预览分组与名称对齐R18')).toBe('adjustment');
   });
 
   it('测试类', () => {
@@ -80,6 +88,34 @@ describe('normalizeTitleForMatch 标题归一化', () => {
     expect(normalizeTitleForMatch('v2')).toBe('v2');
     expect(normalizeTitleForMatch('（2）')).toBe('（2）');
     expect(normalizeTitleForMatch('副本')).toBe('副本');
+  });
+
+  it('标题中段版本号 / 日期戳 / 版本修饰词剥离（真实交付标题形态）', () => {
+    const base = normalizeTitleForMatch('控制箱APP需求规格说明书');
+    // 截图中的 5 个变体：版本号嵌在标题中间 + 日期戳 + 修饰词
+    expect(normalizeTitleForMatch('控制箱APP需求规格说明书_V3.4_详细交付版_20261103')).toBe(base);
+    expect(normalizeTitleForMatch('控制箱APP需求规格说明书_V3.3_详细交付版_20261103')).toBe(base);
+    expect(normalizeTitleForMatch('控制箱APP需求规格说明书_V3.1_详细交付版_20261103')).toBe(base);
+    expect(normalizeTitleForMatch('控制箱APP需求规格说明书_V3.0_润色整合版_20261103')).toBe(base);
+    // ArcTech 使用说明系列
+    const manual = normalizeTitleForMatch('ArcTech Controller用户使用说明');
+    expect(normalizeTitleForMatch('ArcTech Controller用户使用说明_V1.3.3_详细交付版_20261103')).toBe(manual);
+    expect(normalizeTitleForMatch('ArcTech Controller用户使用说明_V1.2.0_润色整合版_20261103')).toBe(manual);
+    // 日期戳两种形态
+    expect(normalizeTitleForMatch('蓝牙控制箱APP研发需求说明书_20260825'))
+      .toBe(normalizeTitleForMatch('蓝牙控制箱APP研发需求说明书'));
+    expect(normalizeTitleForMatch('蓝牙APP测试验证 2026.10.27'))
+      .toBe(normalizeTitleForMatch('蓝牙APP测试验证'));
+    // version 全词中段
+    expect(normalizeTitleForMatch('设计文档 version 2.0 最终稿')).toBe(normalizeTitleForMatch('设计文档'));
+  });
+
+  it('中段剥离不误伤：无点版本号与编号保留', () => {
+    // 不带点的 V2/R17/IPv6 不剥（避免误伤非版本语境）
+    expect(normalizeTitleForMatch('IPv6网络设计')).toBe(normalizeTitleForMatch('ipv6网络设计'));
+    expect(normalizeTitleForMatch('界面调整R17')).toBe(normalizeTitleForMatch('界面调整r17'));
+    // V2.0（带点）剥离后与其余部分组成新标题，不产生空串
+    expect(normalizeTitleForMatch('V2.0（源码阅读后）')).toBe(normalizeTitleForMatch('（源码阅读后）'));
   });
 
   it('不同标题不误归一', () => {

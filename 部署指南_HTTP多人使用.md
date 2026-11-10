@@ -62,6 +62,43 @@ curl http://localhost:3210/health
 
 服务进程不能挂在终端会话上，选一种：
 
+**Windows — 一键管理脚本（推荐）**：项目根目录自带 `service.mjs` + `service.config.json`，后台启动与 Windows 服务安装统一管理。
+
+```bash
+# 0. 按需编辑 service.config.json（启动模式/端口/Node 路径/服务名等）
+
+# 1. 环境自检（Node 版本、构建产物、AUTH_TOKEN、原生模块 ABI、服务管理器）
+node service.mjs doctor
+
+# 2. 后台启动（无需管理员权限；detached 进程，日志落 logs/service.log，PID 文件管理）
+node service.mjs start
+node service.mjs status        # 运行状态 + /health 健康检查
+node service.mjs stop          # 停止（taskkill 进程树）
+node service.mjs restart       # 重启
+node service.mjs logs 100      # 查看最近 100 行日志
+node service.mjs run           # 前台调试运行（Ctrl+C 停止）
+
+# 3. 安装为 Windows 服务（需"以管理员身份运行"的终端；开机自启 + 崩溃自动重启）
+node service.mjs install       # 装完自动启动
+node service.mjs uninstall     # 卸载（需管理员）
+```
+
+`service.config.json` 关键字段：
+
+| 字段 | 说明 |
+|---|---|
+| `server.mode` | 启动模式：`web`（HTTP，默认）/ `stdio` / `stdio-web`（stdio + 内嵌 Web 后台） |
+| `server.port` | 服务端口；显式设置时优先于 `.env` 的 `PORT` |
+| `server.nodePath` | 指定服务使用的 node.exe（多版本共存或原生模块 ABI 不匹配时；留空用执行脚本的 node） |
+| `service.name` / `displayName` | Windows 服务名（ASCII）/ 服务显示名 |
+| `service.startup` | `auto`（开机自启，默认）/ `manual`（手动启动） |
+| `daemon.manager` | 服务后端：`auto`（优先 NSSM，缺则 WinSW 自动下载）/ `nssm` / `winsw` |
+| `daemon.logDir` / `logRotationMB` | 日志目录与单文件轮转阈值 |
+
+服务后端说明：NSSM 需自行下载（nssm.cc）放到 `tools/nssm/` 或 PATH；WinSW 会在 install 时自动从 GitHub（含镜像）下载到 `tools/winsw/`。两者均已配置日志重定向（`logs/service.log`）、按大小轮转、崩溃 5 秒后自动重启。
+
+注意：脚本启动前会做端口占用预检——若 3210 已有实例在响应（非脚本管理的进程）会拒绝启动，避免双进程共用 `data/` 触发 `SQLITE_BUSY`。
+
 **Linux — systemd 示例**（`/etc/systemd/system/frag-mcp.service`）：
 
 ```ini
