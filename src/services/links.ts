@@ -218,6 +218,8 @@ export interface GraphNode {
   id: string;
   title: string;
   source_type: string;
+  /** 文档分类 id（前端按分类着色聚簇） */
+  doc_type: string;
   version_no: number;
   updated_at: string;
   /** 关联边数（含双向），用于节点大小渲染 */
@@ -238,7 +240,7 @@ export function projectGraph(db: Db, projectId: string): { nodes: GraphNode[]; e
   if (!project) throw new Error(`项目不存在: ${projectId}（可先调用 list_projects 获取）`);
 
   const nodes = db.prepare(`
-    SELECT d.id, d.title, d.source_type, d.updated_at,
+    SELECT d.id, d.title, d.source_type, d.doc_type, d.updated_at,
            COALESCE(v.version_no, 1) AS version_no,
            (SELECT COUNT(*) FROM doc_links l
             WHERE (l.source_id = d.id OR l.target_id = d.id)
