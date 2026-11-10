@@ -214,21 +214,61 @@ function applyOption() {
   });
 }
 
-/** 锁定/取消锁定节点：只改选中节点的描边（合并 option，不打断布局演算） */
+/** getOption 里 link 的 source/target 可能是 id 或节点对象，统一取 id */
+const linkEndId = (s: any) => (typeof s === 'object' && s !== null ? s.id : s);
+
+/** 锁定态样式：锁定节点红描边 + 邻居/关联边高亮，其余节点与边淡化（合并 option，不打断布局演算） */
 function applySelection() {
   if (!chart) return;
   const series: any = chart.getOption().series?.[0];
   if (!series?.data) return;
-  const data = series.data.map((d: any) => ({
-    ...d,
-    itemStyle: d.id === selectedId.value
-      ? { borderColor: '#f56c6c', borderWidth: 2.5, shadowBlur: 8, shadowColor: 'rgba(245,108,108,.6)' }
-      : {},
-    label: d.id === selectedId.value
-      ? { show: true, fontWeight: 'bold', formatter: d.raw.title }
-      : {},
-  }));
-  chart.setOption({ series: [{ data }] });
+  const locked = selectedId.value;
+  const neighborSet = new Set<string>();
+  if (locked) {
+    for (const l of series.links ?? []) {
+      const sid = linkEndId(l.source);
+      const tid = linkEndId(l.target);
+      if (sid === locked) neighborSet.add(tid);
+      else if (tid === locked) neighborSet.add(sid);
+    }
+  }
+  const data = series.data.map((d: any) => {
+    const isLocked = d.id === locked;
+    const dimmed = !!locked && !isLocked && !neighborSet.has(d.id);
+    return {
+      ...d,
+      itemStyle: isLocked
+        ? { borderColor: '#f56c6c', borderWidth: 2.5, shadowBlur: 8, shadowColor: 'rgba(245,108,108,.6)', opacity: 1 }
+        : dimmed
+          ? { opacity: 0.15 }
+          : {},
+      label: isLocked
+        ? { show: true, fontWeight: 'bold', formatter: d.raw.title }
+        : dimmed
+          ? { show: false }
+          : {},
+    };
+  });
+  const links = (series.links ?? []).map((l: any) => {
+    const related = !locked || linkEndId(l.source) === locked || linkEndId(l.target) === locked;
+    const raw = l.raw;
+    return {
+      ...l,
+      lineStyle: {
+        width: locked && related ? 2.4 : 0.6 + raw.score * 1.6,
+        opacity: locked ? (related ? 0.9 : 0.05) : 0.2 + raw.score * 0.45,
+        color: raw.type === 'manual' ? '#e6a23c' : 'source',
+      },
+    };
+  });
+  chart.setOption({ series: [{ data, links }] });
+}
+
+/** 悬浮高亮模式：未锁定时悬浮自动聚焦邻居；锁定期间关闭（hover 不再改变关联视图） */
+function applyHoverMode() {
+  chart?.setOption({
+    series: [{ emphasis: { focus: selectedId.value ? 'none' : 'adjacency' } }],
+  });
 }
 
 function initChart() {
@@ -256,8 +296,19 @@ function initChart() {
   resizeOb.observe(el);
 }
 
-watch([shownEdges, hiddenCats, labelMode, showFullNames, repulsion], () => applyOption());
-watch(selectedId, () => applySelection());
+watch([shownEdges, hiddenCats, labelMode, showFullNames, repulsion], () => {
+  applyOption();
+  applyHoverMode();
+  if (selectedId.value) applySelection();
+});
+
+/** 锁定/解锁：清掉悬浮残留高亮 → 切换悬浮模式 → 应用锁定样式 */
+watch(selectedId, () => {
+  if (!chart) return;
+  chart.dispatchAction({ type: 'downplay' });
+  applyHoverMode();
+  applySelection();
+});
 
 // ---------- 点击锁定联动：重建右侧关联面板（展示全部关联，不受显示过滤器影响） ----------
 watch([selectedId, edges], () => {
