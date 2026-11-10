@@ -11,6 +11,7 @@
  *   node service.mjs status        查看运行状态与健康检查
  *   node service.mjs install       安装为 Windows 服务（需管理员）
  *   node service.mjs uninstall     卸载 Windows 服务（需管理员）
+ *   node service.mjs update        一键升级运行目录: git pull → 按需 install → 前后端构建 → 重启服务
  *   node service.mjs logs [N]      查看最近日志（默认 50 行）
  *   node service.mjs doctor        环境自检
  *   node service.mjs init          生成默认 service.config.json
@@ -43,7 +44,7 @@ import {
   copyFileSync,
   rmSync,
 } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
@@ -795,6 +796,80 @@ async function cmdLogs(lines = 50) {
   printLogTail(cfg, lines);
 }
 
+/** 执行 shell 命令，失败即终止（stdio 直通） */
+function runCmd(cmd, args, opts = {}) {
+  info(`${cmd} ${args.join(' ')}${opts.cwd ? `（${opts.cwd}）` : ''} ...`);
+  const r = spawnSync(cmd, args, { stdio: 'inherit', cwd: ROOT, ...opts });
+  if (r.status !== 0 || r.error) {
+    die(`${cmd} ${args.join(' ')} 失败${r.error ? `: ${r.error.message}` : `（exit ${r.status}）`}`);
+  }
+}
+
+/** git 输出捕获 */
+function gitOut(args) {
+  const r = spawnSync('git', args, { encoding: 'utf8', cwd: ROOT });
+  if (r.status !== 0 || r.error) die(`git ${args.join(' ')} 失败: ${(r.stderr || r.error?.message || '').trim()}`);
+  return (r.stdout || '').trim();
+}
+
+/** 一键升级运行目录: git pull → 按需 npm install → 前后端构建 → 重启服务 */
+async function cmdUpdate() {
+  const cfg = loadConfig();
+  const noRestart = rest.includes('--no-restart');
+
+  // 1. git pull（记录前后 HEAD，用于判断依赖是否有变化）
+  const headBefore = gitOut(['rev-parse', 'HEAD']);
+  runCmd('git', ['pull']);
+  const headAfter = gitOut(['rev-parse', 'HEAD']);
+  const pulled = headBefore !== headAfter;
+  info(pulled ? `代码已更新: ${headBefore.slice(0, 7)} → ${headAfter.slice(0, 7)}` : '代码已是最新，无需 pull');
+
+  // 2. 依赖：node_modules 缺失，或本次更新改动了 package.json / package-lock.json 时才安装。
+  //    npm 的 PATH 前置 nodePath 所在目录，保证原生模块（better-sqlite3）按服务实际使用的 node ABI 编译。
+  const nodeDir = dirname(resolveNodeExe(cfg));
+  const npmEnv = { ...process.env, PATH: `${nodeDir}${delimiter}${process.env.PATH}` };
+  const changed = (paths) =>
+    pulled && gitOut(['diff', '--name-only', headBefore, headAfter, '--', ...paths]).length > 0;
+  const runNpm = (args, cwd) => runCmd('npm', args, { cwd, env: npmEnv, shell: true, windowsHide: true });
+
+  if (!existsSync(join(ROOT, 'node_modules')) || changed(['package.json', 'package-lock.json'])) {
+    runNpm(['install']);
+  } else {
+    info('根目录依赖无变化，跳过 npm install');
+  }
+  if (!existsSync(join(ROOT, 'web', 'node_modules')) || changed(['web/package.json', 'web/package-lock.json'])) {
+    runNpm(['install'], join(ROOT, 'web'));
+  }
+
+  // 3. 前后端构建
+  runNpm(['run', 'build']);
+  runNpm(['run', 'build'], join(ROOT, 'web'));
+
+  // 4. 重启
+  if (noRestart) {
+    ok('构建完成（--no-restart，未重启服务）');
+    return;
+  }
+  if (serviceInstalled(cfg.service.name)) {
+    if (isAdmin()) {
+      info(`重启 Windows 服务 ${cfg.service.name} ...`);
+      if (serviceControl(cfg.service.name, 'Restart')) await waitHealthIfWeb(cfg);
+      else die('服务重启失败，可手动执行: node service.mjs restart（管理员终端）');
+    } else {
+      bad('代码已构建完成，但当前终端非管理员，无法自动重启 Windows 服务。');
+      info('请用管理员终端执行: node service.mjs restart');
+    }
+    return;
+  }
+  const pid = readPid(cfg);
+  if (pidAlive(pid)) {
+    await cmdStop();
+    await cmdStart();
+  } else {
+    info('服务未在运行（无 Windows 服务也无后台进程）。如需启动: node service.mjs start');
+  }
+}
+
 async function cmdRun() {
   const cfg = loadConfig();
   if (!existsSync(scriptPath(cfg))) {
@@ -906,6 +981,8 @@ function cmdHelp() {
   status        查看运行状态与健康检查
   install       安装为 Windows 服务（需管理员权限终端）
   uninstall     卸载 Windows 服务（需管理员权限终端；--force 可就地删除注册在别处/文件丢失的服务）
+  update        一键升级运行目录: git pull → 按需 npm install → 前后端构建 → 重启服务
+                （--no-restart 只拉取构建不重启；依赖变化时自动 install，npm 按 nodePath 的 node 编译原生模块）
   logs [行数]   查看最近日志（默认 50 行）
   doctor        环境自检（Node/构建/鉴权/端口/服务管理器）
   init          生成默认 service.config.json
@@ -938,6 +1015,7 @@ const commands = {
   status: cmdStatus,
   install: () => cmdInstall(!rest.includes('--no-start')),
   uninstall: () => cmdUninstall(rest.includes('--force')),
+  update: cmdUpdate,
   logs: () => cmdLogs(Number(rest[0]) > 0 ? Number(rest[0]) : 50),
   doctor: cmdDoctor,
   init: cmdInit,
