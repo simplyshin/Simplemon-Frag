@@ -240,10 +240,10 @@ function initGraph() {
     .linkOpacity(linkOpacityFn)
     .linkWidth(linkWidthFn)
     .onNodeHover((n: Node3D | null) => { hoverId.value = n?.id ?? null; })
-    .onClick((n: Node3D | null) => {
-      if (n) selectedId.value = selectedId.value === n.id ? null : n.id;
-      else deselect();
+    .onNodeClick((n: Node3D) => {
+      selectedId.value = selectedId.value === n.id ? null : n.id;
     })
+    .onBackgroundClick(() => deselect())
     .onEngineStop(() => {
       if (needFit) {
         needFit = false;
