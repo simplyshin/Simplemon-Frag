@@ -21,7 +21,18 @@ const uploading = ref(false);
 // 分类（动态，来自 /api/doc-categories）/ 时间筛选 / 搜索 / 分页状态
 const categories = ref<DocCategory[]>([]);
 const activeType = ref<string>('all');
-const dateRange = ref<[string, string] | null>(null);
+// 时间筛选：快捷段 'all'=全部 / 7|15|30=近 N 天 / null=自定义区间；默认近 7 天
+const quickRange = ref<number | 'all' | null>(7);
+const fmtLocalDate = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+/** 近 N 个自然日（含今天）的本地日期区间 */
+const rangeForDays = (days: number): [string, string] => {
+  const end = new Date();
+  const start = new Date();
+  start.setDate(start.getDate() - (days - 1));
+  return [fmtLocalDate(start), fmtLocalDate(end)];
+};
+const dateRange = ref<[string, string] | null>(rangeForDays(7));
 const keywordInput = ref('');
 const keyword = ref('');
 const page = ref(1);
@@ -84,7 +95,22 @@ function switchType() {
   load();
 }
 
-function onDateRangeChange() {
+/** 点击快捷时间段：7/15/30 天重置区间并立即查询 */
+function pickQuick(v: string | number | boolean | undefined) {
+  if (typeof v === 'number') {
+    quickRange.value = v;
+    dateRange.value = rangeForDays(v);
+  } else {
+    quickRange.value = 'all';
+    dateRange.value = null;
+  }
+  page.value = 1;
+  load();
+}
+
+function onDateRangeChange(v: [string, string] | null) {
+  // 手动选日期 → 退出快捷选中；手动清空 → 等同"全部"
+  quickRange.value = v ? null : 'all';
   page.value = 1;
   load();
 }
@@ -189,6 +215,12 @@ onMounted(() => {
         <el-option value="all" :label="`全部（${countOf('all')}）`" />
         <el-option v-for="c in categories" :key="c.id" :value="c.id" :label="`${c.name}（${countOf(c.id)}）`" />
       </el-select>
+      <el-radio-group :model-value="quickRange" size="small" @change="pickQuick">
+        <el-radio-button value="all">全部</el-radio-button>
+        <el-radio-button :value="7">近7天</el-radio-button>
+        <el-radio-button :value="15">近15天</el-radio-button>
+        <el-radio-button :value="30">近30天</el-radio-button>
+      </el-radio-group>
       <el-date-picker
         v-model="dateRange"
         type="daterange"
