@@ -212,7 +212,7 @@ function computeCenters() {
   for (const n of nodeObjs) counts.set(n.doc_type, (counts.get(n.doc_type) ?? 0) + 1);
   const catList = [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([c]) => c);
   catCenters = {};
-  const R = 180;
+  const R = 300;
   catList.forEach((c, i) => {
     const phi = Math.acos(1 - (2 * (i + 0.5)) / catList.length);
     const theta = Math.PI * (1 + Math.sqrt(5)) * i;
@@ -250,16 +250,35 @@ function initGraph() {
         graph.zoomToFit(500, 60);
       }
     });
-  graph.d3Force('charge')?.strength(-110);
-  graph.d3Force('link')?.distance(60);
-  // 分类聚簇力：节点向各自分类中心持续微拉（与关联弹簧力共同作用）
+  graph.d3Force('charge')?.strength(-200);
+  graph.d3Force('link')?.distance(110);
+  // 分类聚簇力：节点向各自分类中心持续微拉（弱化——分区但不压缩成实心球）
   graph.d3Force('cluster', (alpha: number) => {
     for (const n of graph.graphData().nodes as Node3D[]) {
       const c = catCenters[n.doc_type];
       if (!c) continue;
-      n.vx += (c.x - n.x) * alpha * 2;
-      n.vy += (c.y - n.y) * alpha * 2;
-      n.vz += (c.z - n.z) * alpha * 2;
+      n.vx += (c.x - n.x) * alpha * 0.8;
+      n.vy += (c.y - n.y) * alpha * 0.8;
+      n.vz += (c.z - n.z) * alpha * 0.8;
+    }
+  });
+  // 防重叠力（forceCollide）：节点球体之间保证最小间距，从物理上消除节点叠加
+  graph.d3Force('collide', () => {
+    const arr = graph.graphData().nodes as Node3D[];
+    for (let i = 0; i < arr.length; i++) {
+      const a = arr[i];
+      for (let j = i + 1; j < arr.length; j++) {
+        const b = arr[j];
+        const dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+        const minDist = radiusOf(a.val) + radiusOf(b.val) + 4;
+        const d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 >= minDist * minDist || d2 === 0) continue;
+        const dist = Math.sqrt(d2);
+        const push = ((minDist - dist) / dist) * 0.3;
+        const mx = dx * push * 0.5, my = dy * push * 0.5, mz = dz * push * 0.5;
+        a.x += mx; a.y += my; a.z += mz;
+        b.x -= mx; b.y -= my; b.z -= mz;
+      }
     }
   });
   graph.width(el.clientWidth || 800).height(el.clientHeight || 600);
@@ -364,9 +383,9 @@ async function load() {
     computeCenters();
     nodeObjs.forEach((n) => {
       const c = catCenters[n.doc_type] ?? { x: 0, y: 0, z: 0 };
-      n.x = c.x + (Math.random() - 0.5) * 90;
-      n.y = c.y + (Math.random() - 0.5) * 90;
-      n.z = c.z + (Math.random() - 0.5) * 90;
+      n.x = c.x + (Math.random() - 0.5) * 130;
+      n.y = c.y + (Math.random() - 0.5) * 130;
+      n.z = c.z + (Math.random() - 0.5) * 130;
     });
     initGraph();
     rebuildGraph();
@@ -382,9 +401,9 @@ async function load() {
 function relayout() {
   nodeObjs.forEach((n) => {
     const c = catCenters[n.doc_type] ?? { x: 0, y: 0, z: 0 };
-    n.x = c.x + (Math.random() - 0.5) * 110;
-    n.y = c.y + (Math.random() - 0.5) * 110;
-    n.z = c.z + (Math.random() - 0.5) * 110;
+    n.x = c.x + (Math.random() - 0.5) * 150;
+    n.y = c.y + (Math.random() - 0.5) * 150;
+    n.z = c.z + (Math.random() - 0.5) * 150;
   });
   rebuildGraph();
 }
