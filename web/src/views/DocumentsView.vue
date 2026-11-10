@@ -3,9 +3,9 @@ import { computed, onMounted, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import type { UploadRequestOptions } from 'element-plus';
-import { Search, Share, Upload } from '@element-plus/icons-vue';
+import { Search, Share, Setting, Upload } from '@element-plus/icons-vue';
 import PageHeader from '../components/PageHeader.vue';
-import { api, type DocumentListResult, type DocumentSummary, type Project } from '../api';
+import { api, type DocCategory, type DocumentListResult, type DocumentSummary, type Project } from '../api';
 
 const route = useRoute();
 const router = useRouter();
@@ -17,16 +17,10 @@ const loading = ref(false);
 const uploadRef = ref();
 const uploading = ref(false);
 
-// 分类过滤 / 搜索 / 分页状态
-const DOC_TYPE_OPTIONS = [
-  { value: 'requirement', label: '需求' },
-  { value: 'contract', label: '合同' },
-  { value: 'adjustment', label: '调整记录' },
-  { value: 'tech', label: '技术说明' },
-  { value: 'test', label: '测试' },
-  { value: 'other', label: '其他' },
-] as const;
+// 分类（动态，来自 /api/doc-categories）/ 时间筛选 / 搜索 / 分页状态
+const categories = ref<DocCategory[]>([]);
 const activeType = ref<string>('all');
+const dateRange = ref<[string, string] | null>(null);
 const keywordInput = ref('');
 const keyword = ref('');
 const page = ref(1);
@@ -37,6 +31,33 @@ let keywordTimer: ReturnType<typeof setTimeout> | null = null;
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)));
 
+const TAG_COLORS = [
+  { value: 'primary', label: '主色' },
+  { value: 'success', label: '绿色' },
+  { value: 'info', label: '灰色' },
+  { value: 'warning', label: '橙色' },
+  { value: 'danger', label: '红色' },
+] as const;
+
+async function loadCategories() {
+  try {
+    const r = await api<{ items: DocCategory[] }>('GET', '/api/doc-categories');
+    categories.value = r.items;
+  } catch (e) {
+    ElMessage.error((e as Error).message);
+  }
+}
+
+const catNameMap = computed(() => Object.fromEntries(categories.value.map((c) => [c.id, c.name])));
+const catColorMap = computed(() => Object.fromEntries(categories.value.map((c) => [c.id, c.color])));
+const docTypeLabel = (t: string) => catNameMap.value[t] ?? t;
+const docTypeTag = (t: string): 'primary' | 'success' | 'info' | 'warning' | 'danger' =>
+  (catColorMap.value[t] as 'primary' | 'success' | 'info' | 'warning' | 'danger' | undefined) ?? 'info';
+
+/** 本地时区日期 → UTC ISO 边界（updated_at 存 UTC，按本地"自然日"对齐） */
+const toIso = (d: string, endOfDay = false) =>
+  new Date(`${d}T${endOfDay ? '23:59:59.999' : '00:00:00'}`).toISOString();
+
 async function load() {
   loading.value = true;
   try {
@@ -46,7 +67,9 @@ async function load() {
         `/api/projects/${projectId}/documents`
         + `?page=${page.value}&page_size=${pageSize.value}`
         + (activeType.value !== 'all' ? `&doc_type=${activeType.value}` : '')
-        + (keyword.value ? `&keyword=${encodeURIComponent(keyword.value)}` : '')),
+        + (keyword.value ? `&keyword=${encodeURIComponent(keyword.value)}` : '')
+        + (dateRange.value?.[0] ? `&updated_from=${encodeURIComponent(toIso(dateRange.value[0]))}` : '')
+        + (dateRange.value?.[1] ? `&updated_to=${encodeURIComponent(toIso(dateRange.value[1], true))}` : '')),
     ]);
     project.value = projects.find((p) => p.id === projectId) ?? null;
     docs.value = list.items;
@@ -64,8 +87,12 @@ async function load() {
   }
 }
 
-function switchType(t: string) {
-  activeType.value = t;
+function switchType() {
+  page.value = 1;
+  load();
+}
+
+function onDateRangeChange() {
   page.value = 1;
   load();
 }
@@ -77,6 +104,90 @@ function onKeywordInput() {
     page.value = 1;
     load();
   }, 300);
+}
+
+// ---------- 分类管理 ----------
+
+const catDialog = ref(false);
+const newCatName = ref('');
+const newCatColor = ref('info');
+const catSaving = ref(false);
+
+async function addCategory() {
+  const name = newCatName.value.trim();
+  if (!name) {
+    ElMessage.warning('请输入分类名称');
+    return;
+  }
+  catSaving.value = true;
+  try {
+    await api('POST', '/api/doc-categories', { name, color: newCatColor.value });
+    newCatName.value = '';
+    ElMessage.success(`分类「${name}」已添加`);
+    await loadCategories();
+    load();
+  } catch (e) {
+    ElMessage.error((e as Error).message);
+  } finally {
+    catSaving.value = false;
+  }
+}
+
+async function renameCategory(row: DocCategory) {
+  let name: string;
+  try {
+    const r = await ElMessageBox.prompt(`修改分类「${row.name}」的名称`, '重命名分类', {
+      inputValue: row.name,
+      inputPattern: /\S+/,
+      inputErrorMessage: '名称不能为空',
+    });
+    name = (r.value ?? '').trim();
+  } catch { return; }
+  if (!name || name === row.name) return;
+  try {
+    await api('PATCH', `/api/doc-categories/${row.id}`, { name });
+    ElMessage.success('已重命名');
+    await loadCategories();
+    load();
+  } catch (e) {
+    ElMessage.error((e as Error).message);
+  }
+}
+
+async function changeColor(row: DocCategory, color: string) {
+  if (color === row.color) return;
+  try {
+    await api('PATCH', `/api/doc-categories/${row.id}`, { color });
+    ElMessage.success('标签色已更新');
+    await loadCategories();
+    load();
+  } catch (e) {
+    ElMessage.error((e as Error).message);
+  }
+}
+
+async function removeCategory(row: DocCategory) {
+  try {
+    await ElMessageBox.confirm(
+      `删除自定义分类「${row.name}」？该分类下的文档将自动归入「其他」。`,
+      '删除分类',
+      { type: 'warning' },
+    );
+  } catch { return; }
+  try {
+    await api<{ moved_documents: number }>('DELETE', `/api/doc-categories/${row.id}`);
+    ElMessage.success('分类已删除');
+    if (activeType.value === row.id) activeType.value = 'all';
+    await loadCategories();
+    load();
+  } catch (e) {
+    ElMessage.error((e as Error).message);
+  }
+}
+
+function openCatDialog() {
+  catDialog.value = true;
+  loadCategories();
 }
 
 /** 自定义上传：multipart POST，成功后刷新列表 */
@@ -126,10 +237,6 @@ async function changeDocType(row: DocumentSummary, docType: string) {
   }
 }
 
-const docTypeLabel = (t: string) => DOC_TYPE_OPTIONS.find((o) => o.value === t)?.label ?? t;
-const docTypeTag = (t: string): 'primary' | 'success' | 'info' | 'warning' | 'danger' =>
-  ({ requirement: 'primary', contract: 'warning', adjustment: 'danger', tech: 'success', test: 'info', other: 'info' } as const)[t as never] ?? 'info';
-
 const sourceTag = (t: string) => ({
   web: '后台上传', mcp: 'MCP', index: '自动索引', generated: '自动生成',
   communication: '沟通记录', file: '文件', email: '邮件', chat: '聊天', meeting: '会议',
@@ -137,7 +244,10 @@ const sourceTag = (t: string) => ({
 
 const countOf = (t: string) => (t === 'all' ? total.value : counts.value[t] ?? 0);
 
-onMounted(load);
+onMounted(() => {
+  load();
+  loadCategories();
+});
 </script>
 
 <template>
@@ -160,19 +270,35 @@ onMounted(load);
     </PageHeader>
     <p class="page-body" style="margin-bottom: 16px; color: var(--el-text-color-secondary)">{{ project?.description }}</p>
 
-    <!-- 分类 Tab + 搜索 -->
-    <div style="margin-bottom: 16px; display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap">
-      <el-radio-group :model-value="activeType" @update:model-value="switchType">
-        <el-radio-button value="all">全部（{{ countOf('all') }}）</el-radio-button>
-        <el-radio-button v-for="o in DOC_TYPE_OPTIONS" :key="o.value" :value="o.value">
-          {{ o.label }}（{{ countOf(o.value) }}）
-        </el-radio-button>
-      </el-radio-group>
+    <!-- 分类下拉 + 时间筛选 + 搜索 -->
+    <div style="margin-bottom: 16px; display: flex; align-items: center; gap: 8px; flex-wrap: wrap">
+      <el-select
+        v-model="activeType"
+        style="width: 200px"
+        placeholder="全部分类"
+        @change="switchType"
+      >
+        <el-option value="all" :label="`全部（${countOf('all')}）`" />
+        <el-option v-for="c in categories" :key="c.id" :value="c.id" :label="`${c.name}（${countOf(c.id)}）`" />
+      </el-select>
+      <el-date-picker
+        v-model="dateRange"
+        type="daterange"
+        value-format="YYYY-MM-DD"
+        start-placeholder="更新起始日"
+        end-placeholder="更新截止日"
+        range-separator="至"
+        unlink-panels
+        clearable
+        style="width: 260px"
+        @change="onDateRangeChange"
+      />
+      <el-button :icon="Setting" @click="openCatDialog">管理分类</el-button>
       <el-input
         v-model="keywordInput"
         placeholder="按标题搜索"
         clearable
-        style="width: 220px"
+        style="width: 220px; margin-left: auto"
         :prefix-icon="Search"
         @input="onKeywordInput"
         @clear="keyword = ''; page = 1; load()"
@@ -194,11 +320,11 @@ onMounted(load);
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item
-                  v-for="o in DOC_TYPE_OPTIONS"
-                  :key="o.value"
-                  :command="o.value"
-                  :disabled="o.value === row.doc_type"
-                >{{ o.label }}</el-dropdown-item>
+                  v-for="c in categories"
+                  :key="c.id"
+                  :command="c.id"
+                  :disabled="c.id === row.doc_type"
+                >{{ c.name }}</el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -234,5 +360,51 @@ onMounted(load);
         @size-change="page = 1; load()"
       />
     </div>
+
+    <!-- 分类管理 -->
+    <el-dialog v-model="catDialog" title="分类管理" width="600px">
+      <el-table :data="categories" size="small" max-height="360">
+        <el-table-column prop="name" label="名称" min-width="140">
+          <template #default="{ row }">
+            <el-tag size="small" :type="docTypeTag(row.id)">{{ row.name }}</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="标签色" width="130">
+          <template #default="{ row }">
+            <el-select :model-value="row.color" size="small" @change="(v: string) => changeColor(row, v)">
+              <el-option v-for="c in TAG_COLORS" :key="c.value" :value="c.value" :label="c.label" />
+            </el-select>
+          </template>
+        </el-table-column>
+        <el-table-column label="内置" width="70">
+          <template #default="{ row }">
+            <el-tag v-if="row.built_in" size="small" type="warning">内置</el-tag>
+            <el-tag v-else size="small" type="info">自定义</el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="130">
+          <template #default="{ row }">
+            <el-button size="small" link type="primary" @click="renameCategory(row)">重命名</el-button>
+            <el-button v-if="!row.built_in" size="small" link type="danger" @click="removeCategory(row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+      <div style="margin-top: 14px; display: flex; gap: 8px; align-items: center">
+        <el-input
+          v-model="newCatName"
+          placeholder="新分类名称（最多 30 字）"
+          maxlength="30"
+          style="width: 220px"
+          @keyup.enter="addCategory"
+        />
+        <el-select v-model="newCatColor" style="width: 110px">
+          <el-option v-for="c in TAG_COLORS" :key="c.value" :value="c.value" :label="c.label" />
+        </el-select>
+        <el-button type="primary" :loading="catSaving" @click="addCategory">添加分类</el-button>
+      </div>
+      <template #footer>
+        <el-button @click="catDialog = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>

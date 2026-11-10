@@ -3,7 +3,8 @@ import { readFileSync } from 'node:fs';
 import type { Db } from '../db/index.js';
 import { chunkContent } from './chunk.js';
 import { hashContent } from './hash.js';
-import { findMergeableDocument, inferDocType, type DocType } from './doc-classify.js';
+import { findMergeableDocument, inferDocType } from './doc-classify.js';
+import { listCategories } from './categories.js';
 
 const now = (): string => new Date().toISOString();
 
@@ -74,7 +75,8 @@ export interface DocumentSummary {
   project_id: string;
   title: string;
   source_type: string;
-  doc_type: DocType;
+  /** 分类 id（doc_categories 表：内置 slug 或自定义 UUID） */
+  doc_type: string;
   version_no: number;
   updated_at: string;
 }
@@ -123,7 +125,7 @@ interface DocumentRow {
   project_id: string;
   title: string;
   source_type: string;
-  doc_type: DocType;
+  doc_type: string;
   latest_version_id: string | null;
   deleted_at: string | null;
   updated_at: string;
@@ -160,8 +162,8 @@ export function addDocument(
     createdBy?: string;
     /** 沟通元数据等扩展信息（P5），JSON 序列化存 documents.metadata */
     metadata?: Record<string, unknown>;
-    /** 显式指定分类优先；缺省按标题关键词自动推断 */
-    docType?: DocType;
+    /** 显式指定分类（doc_categories 表的分类 id）优先；缺省按标题关键词自动推断 */
+    docType?: string;
     /** 同名（含归一化后同名）文档自动合并为新版本；默认 true，内部自动索引/生成文档应传 false */
     mergeSameTitle?: boolean;
   },
@@ -171,7 +173,7 @@ export function addDocument(
   chunk_count: number;
   duplicates: { id: string; title: string }[];
   merged?: boolean;
-  doc_type: DocType;
+  doc_type: string;
 } {
   const content = input.filePath ? readFileSync(input.filePath, 'utf-8') : input.content;
   if (!content?.trim()) throw new Error('content 与 file_path 至少提供一个且不能为空');
@@ -429,10 +431,14 @@ export function getDocument(
 }
 
 export interface ListDocumentsOptions {
-  /** 按分类过滤；不传 = 全部 */
-  docType?: DocType;
+  /** 按分类过滤（doc_categories 表的分类 id）；不传 = 全部 */
+  docType?: string;
   /** 标题子串搜索（LIKE，通配符已转义） */
   keyword?: string;
+  /** 更新时间下限（ISO 8601，含边界）；不传 = 不限 */
+  updatedFrom?: string;
+  /** 更新时间上限（ISO 8601，含边界）；不传 = 不限 */
+  updatedTo?: string;
   /** 页码，从 1 开始，默认 1 */
   page?: number;
   /** 每页条数，默认 20；传 0 = 不分页全量返回 */
@@ -444,8 +450,8 @@ export interface DocumentListResult {
   total: number;
   page: number;
   pageSize: number;
-  /** 项目级各分类计数（不受 keyword/docType 过滤影响），供前端分类 Tab 常显 */
-  counts: Record<DocType, number>;
+  /** 项目级各分类计数（随时间筛选联动，不受 keyword/docType 过滤影响），供前端分类下拉框常显 */
+  counts: Record<string, number>;
 }
 
 function escapeLike(keyword: string): string {
@@ -456,6 +462,7 @@ export function listDocuments(db: Db, projectId: string, opts?: ListDocumentsOpt
   const project = db.prepare('SELECT id FROM projects WHERE id = ?').get(projectId);
   if (!project) throw new Error(`项目不存在: ${projectId}（可先调用 list_projects 获取）`);
 
+  const timeOpts = { updatedFrom: opts?.updatedFrom, updatedTo: opts?.updatedTo };
   const conditions = ['d.project_id = ?', 'd.deleted_at IS NULL'];
   const params: (string | number)[] = [projectId];
   if (opts?.docType) {
@@ -465,6 +472,15 @@ export function listDocuments(db: Db, projectId: string, opts?: ListDocumentsOpt
   if (opts?.keyword?.trim()) {
     conditions.push(`d.title LIKE ? ESCAPE '\\'`);
     params.push(`%${escapeLike(opts.keyword.trim())}%`);
+  }
+  // 时间筛选（ISO 8601 UTC 字符串与写入格式一致，直接按字典序比较即为时间序）
+  if (timeOpts.updatedFrom) {
+    conditions.push('d.updated_at >= ?');
+    params.push(timeOpts.updatedFrom);
+  }
+  if (timeOpts.updatedTo) {
+    conditions.push('d.updated_at <= ?');
+    params.push(timeOpts.updatedTo);
   }
   const where = conditions.join(' AND ');
 
@@ -483,28 +499,42 @@ export function listDocuments(db: Db, projectId: string, opts?: ListDocumentsOpt
   if (pageSize > 0) {
     sql += ' LIMIT ? OFFSET ?';
     const items = db.prepare(sql).all(...params, pageSize, (page - 1) * pageSize) as DocumentSummary[];
-    return { items, total, page, pageSize, counts: countByDocType(db, projectId) };
+    return { items, total, page, pageSize, counts: countByDocType(db, projectId, timeOpts) };
   }
   const items = db.prepare(sql).all(...params) as DocumentSummary[];
-  return { items, total, page, pageSize: 0, counts: countByDocType(db, projectId) };
+  return { items, total, page, pageSize: 0, counts: countByDocType(db, projectId, timeOpts) };
 }
 
-/** 项目级各分类文档计数（GROUP BY，供前端分类 Tab 常显） */
-function countByDocType(db: Db, projectId: string): Record<DocType, number> {
+/** 项目级各分类文档计数（GROUP BY，随时间筛选联动；供前端分类下拉框常显计数） */
+function countByDocType(
+  db: Db,
+  projectId: string,
+  timeOpts?: { updatedFrom?: string; updatedTo?: string },
+): Record<string, number> {
+  const conditions = ['project_id = ?', 'deleted_at IS NULL'];
+  const params: (string | number)[] = [projectId];
+  if (timeOpts?.updatedFrom) {
+    conditions.push('updated_at >= ?');
+    params.push(timeOpts.updatedFrom);
+  }
+  if (timeOpts?.updatedTo) {
+    conditions.push('updated_at <= ?');
+    params.push(timeOpts.updatedTo);
+  }
   const rows = db.prepare(`
     SELECT doc_type, COUNT(*) AS n FROM documents
-    WHERE project_id = ? AND deleted_at IS NULL
+    WHERE ${conditions.join(' AND ')}
     GROUP BY doc_type
-  `).all(projectId) as { doc_type: DocType; n: number }[];
-  const counts = { requirement: 0, contract: 0, adjustment: 0, tech: 0, test: 0, other: 0 };
-  for (const r of rows) {
-    if (r.doc_type in counts) counts[r.doc_type] = r.n;
-  }
+  `).all(...params) as { doc_type: string; n: number }[];
+  // 以分类表为准初始化（未出现的分类计 0），再叠加实际计数（含已删除分类的历史值）
+  const counts: Record<string, number> = {};
+  for (const c of listCategories(db)) counts[c.id] = 0;
+  for (const r of rows) counts[r.doc_type] = (counts[r.doc_type] ?? 0) + r.n;
   return counts;
 }
 
 /** 手动修改文档分类（不追加版本、不参与索引） */
-export function setDocumentType(db: Db, documentId: string, docType: DocType): { document_id: string; doc_type: DocType } {
+export function setDocumentType(db: Db, documentId: string, docType: string): { document_id: string; doc_type: string } {
   const result = db.prepare(
     'UPDATE documents SET doc_type = ? WHERE id = ? AND deleted_at IS NULL',
   ).run(docType, documentId);

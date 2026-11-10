@@ -33,6 +33,16 @@ export interface DocumentSummary {
   updated_at: string;
 }
 
+/** 文档分类（doc_categories 表；内置分类 built_in=1 不可删除） */
+export interface DocCategory {
+  id: string;
+  name: string;
+  color: string;
+  sort: number;
+  built_in: number;
+  created_at: string;
+}
+
 export interface DocumentListResult {
   items: DocumentSummary[];
   total: number;

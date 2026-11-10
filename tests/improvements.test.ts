@@ -10,10 +10,10 @@ import { DATA_DIR } from '../src/config/index.js';
 
 /** 改进批次：重复导入检测 / get_document 大纲与分页 / export_document */
 describe('重复导入检测（content_hash）', () => {
-  it('迁移 v3/v4：user_version=4 且存量文档 content_hash 与 doc_type 已回填', () => {
+  it('迁移 v3/v4/v5：user_version=5 且存量文档 content_hash 与 doc_type 已回填、内置分类已预置', () => {
     const db = createTestDb();
     const { docIds } = seedProject(db);
-    expect(db.pragma('user_version', { simple: true })).toBe(4);
+    expect(db.pragma('user_version', { simple: true })).toBe(5);
     for (const id of docIds) {
       const hash = (db.prepare('SELECT content_hash FROM documents WHERE id = ?').get(id) as { content_hash: string }).content_hash;
       expect(hash).toBeTruthy();

@@ -9,7 +9,7 @@ import { sanitizeFilename } from './export.js';
 import { embedPendingChunks } from './embedding.js';
 import { scheduleRebuild } from './indexing.js';
 import { addDocument, setDocumentType, updateDocument } from './document.js';
-import { findMergeableDocument, isDocType, type DocType } from './doc-classify.js';
+import { findMergeableDocument } from './doc-classify.js';
 
 /**
  * 项目资料导入导出（bundle）：
@@ -188,7 +188,7 @@ export function importProjectBundle(
   const rawDocs = Array.isArray(bundle.documents) ? bundle.documents : [];
 
   // 预校验与归一化（事务外完成，事务内只做写入）
-  const docs: { title: string; sourceType: string; docType?: DocType; metadata: Record<string, unknown>; createdAt?: string; versions: BundleVersion[] }[] = [];
+  const docs: { title: string; sourceType: string; docType?: string; metadata: Record<string, unknown>; createdAt?: string; versions: BundleVersion[] }[] = [];
   const preWarnings: string[] = [];
   rawDocs.forEach((d, idx) => {
     const label = `documents[${idx}]`;
@@ -232,7 +232,8 @@ export function importProjectBundle(
     docs.push({
       title,
       sourceType: normalizeSourceType(doc.source_type),
-      docType: isDocType(doc.doc_type) ? doc.doc_type : undefined,
+      // 分类 id 直接保留（doc_categories 动态管理，导入包可能含自定义分类；无效值回落自动推断）
+      docType: typeof doc.doc_type === 'string' && doc.doc_type.trim() ? doc.doc_type.trim() : undefined,
       metadata: parseMetadata(doc.metadata),
       createdAt: typeof doc.created_at === 'string' && !Number.isNaN(Date.parse(doc.created_at))
         ? new Date(doc.created_at).toISOString()

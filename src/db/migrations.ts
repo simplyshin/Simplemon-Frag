@@ -192,5 +192,29 @@ CREATE INDEX idx_documents_doc_type
   },
 };
 
+/** v5 —— 可管理分类：doc_categories 表（内置分类 id 沿用 v4 的 doc_type 枚举值，存量文档零迁移） */
+export const MIGRATION_V5: Migration = {
+  version: 5,
+  name: 'doc-categories-table',
+  sql: `
+CREATE TABLE doc_categories (
+  id         TEXT PRIMARY KEY,              -- 内置分类固定 slug（requirement 等）；自定义分类用 UUID
+  name       TEXT NOT NULL UNIQUE,          -- 显示名
+  color      TEXT NOT NULL DEFAULT 'info',  -- 前端标签色：primary|success|info|warning|danger
+  sort       INTEGER NOT NULL DEFAULT 100,  -- 排序权重，小者在前
+  built_in   INTEGER NOT NULL DEFAULT 0,    -- 1=内置分类（不可删除，可改名/改色）
+  created_at TEXT NOT NULL
+);
+-- 预置内置分类：documents.doc_type 存分类 id，沿用原枚举值无需回填
+INSERT INTO doc_categories (id, name, color, sort, built_in, created_at) VALUES
+  ('requirement', '需求',     'primary', 10, 1, '${new Date().toISOString()}'),
+  ('contract',    '合同',     'warning', 20, 1, '${new Date().toISOString()}'),
+  ('adjustment',  '调整记录', 'danger',  30, 1, '${new Date().toISOString()}'),
+  ('tech',        '技术说明', 'success', 40, 1, '${new Date().toISOString()}'),
+  ('test',        '测试',     'info',    50, 1, '${new Date().toISOString()}'),
+  ('other',       '其他',     'info',    60, 1, '${new Date().toISOString()}');
+`,
+};
+
 /** 全部按版本号升序排列，新增迁移追加到数组末尾 */
-export const MIGRATIONS: readonly Migration[] = [MIGRATION_V1, MIGRATION_V2, MIGRATION_V3, MIGRATION_V4];
+export const MIGRATIONS: readonly Migration[] = [MIGRATION_V1, MIGRATION_V2, MIGRATION_V3, MIGRATION_V4, MIGRATION_V5];

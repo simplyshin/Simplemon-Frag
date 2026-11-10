@@ -5,7 +5,7 @@ import { ElMessage } from 'element-plus';
 import { diffLines } from 'diff';
 import { marked } from 'marked';
 import PageHeader from '../components/PageHeader.vue';
-import { api, type DocumentFull, type VersionSummary } from '../api';
+import { api, type DocCategory, type DocumentFull, type VersionSummary } from '../api';
 
 interface RelatedDoc { document_id: string; title: string; score: number; reason: string }
 
@@ -99,24 +99,23 @@ async function saveEdit() {
 onMounted(() => {
   loadDoc();
   loadVersions();
+  // 分类列表（下拉修改用，静默加载）
+  api<{ items: DocCategory[] }>('GET', '/api/doc-categories')
+    .then((r) => { categories.value = r.items; })
+    .catch(() => { /* 加载失败不影响页面，仅显示原始分类 id */ });
   // P4：自动关联文档（静默加载，无关联不展示）
   api<{ related: RelatedDoc[] }>('GET', `/api/documents/${docId}/links`)
     .then((r) => { related.value = r.related; })
     .catch(() => { /* 关联查询失败不打断页面 */ });
 });
 
-// 分类（手动修改）
-const DOC_TYPE_OPTIONS = [
-  { value: 'requirement', label: '需求' },
-  { value: 'contract', label: '合同' },
-  { value: 'adjustment', label: '调整记录' },
-  { value: 'tech', label: '技术说明' },
-  { value: 'test', label: '测试' },
-  { value: 'other', label: '其他' },
-] as const;
-const docTypeLabel = (t: string) => DOC_TYPE_OPTIONS.find((o) => o.value === t)?.label ?? t;
+// 分类（动态，来自 /api/doc-categories；手动修改）
+const categories = ref<DocCategory[]>([]);
+const catNameMap = computed(() => Object.fromEntries(categories.value.map((c) => [c.id, c.name])));
+const catColorMap = computed(() => Object.fromEntries(categories.value.map((c) => [c.id, c.color])));
+const docTypeLabel = (t: string) => catNameMap.value[t] ?? t;
 const docTypeTag = (t: string): 'primary' | 'success' | 'info' | 'warning' | 'danger' =>
-  ({ requirement: 'primary', contract: 'warning', adjustment: 'danger', tech: 'success', test: 'info', other: 'info' } as const)[t as never] ?? 'info';
+  (catColorMap.value[t] as 'primary' | 'success' | 'info' | 'warning' | 'danger' | undefined) ?? 'info';
 
 async function changeDocType(docType: string) {
   if (!doc.value || docType === doc.value.doc_type) return;
@@ -145,11 +144,11 @@ async function changeDocType(docType: string) {
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item
-                v-for="o in DOC_TYPE_OPTIONS"
-                :key="o.value"
-                :command="o.value"
-                :disabled="o.value === doc.doc_type"
-              >{{ o.label }}</el-dropdown-item>
+                v-for="c in categories"
+                :key="c.id"
+                :command="c.id"
+                :disabled="c.id === doc.doc_type"
+              >{{ c.name }}</el-dropdown-item>
             </el-dropdown-menu>
           </template>
         </el-dropdown>
