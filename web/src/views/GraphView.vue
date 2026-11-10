@@ -259,6 +259,24 @@ function initChart() {
 watch([shownEdges, hiddenCats, labelMode, showFullNames, repulsion], () => applyOption());
 watch(selectedId, () => applySelection());
 
+// ---------- 点击锁定联动：重建右侧关联面板（展示全部关联，不受显示过滤器影响） ----------
+watch([selectedId, edges], () => {
+  const id = selectedId.value;
+  relatedItems.value = [];
+  if (!id) return;
+  relatedItems.value = edges.value
+    .filter((e) => e.source_id === id || e.target_id === id)
+    .map((e) => {
+      const otherId = e.source_id === id ? e.target_id : e.source_id;
+      const other = nodeById.value.get(otherId);
+      return other
+        ? { node: other, edge: e, preview: '', previewLoading: false, expanded: false }
+        : null;
+    })
+    .filter((r): r is RelatedItem => r !== null)
+    .sort((a, b) => b.edge.score - a.edge.score);
+});
+
 function deselect() {
   selectedId.value = null;
 }
