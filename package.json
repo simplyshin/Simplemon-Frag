@@ -24,6 +24,7 @@
     "mammoth": "^1.13.0",
     "pdf-parse": "^2.4.5",
     "sqlite-vec": "^0.1.9",
+    "word-extractor": "^1.0.4",
     "zod": "^4.0.0"
   },
   "devDependencies": {

@@ -111,7 +111,7 @@ export function registerDocumentRoutes(app: FastifyInstance): void {
     }
   });
 
-  // multipart 上传：file（md/txt/docx/pdf）+ 可选 title / changeNote / docType
+  // multipart 上传：file（md/txt/doc/docx/pdf）+ 可选 title / changeNote / docType
   app.post('/api/projects/:id/documents', async (request, reply) => {
     const { id } = request.params as { id: string };
     try {

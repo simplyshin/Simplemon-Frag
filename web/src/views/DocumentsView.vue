@@ -198,12 +198,12 @@ onMounted(() => {
       <el-tooltip content="关联拓扑图" placement="top">
         <el-button :icon="Share" @click="router.push(`/project/${projectId}/graph`)" />
       </el-tooltip>
-      <el-tooltip content="上传文档（md / txt / docx / pdf），同名文档自动合并为新版本" placement="top">
+      <el-tooltip content="上传文档（md / txt / doc / docx / pdf），同名文档自动合并为新版本" placement="top">
         <el-upload
           ref="uploadRef"
           :show-file-list="false"
           :http-request="doUpload"
-          accept=".md,.txt,.docx,.pdf"
+          accept=".md,.txt,.doc,.docx,.pdf"
           :disabled="uploading"
         >
           <el-button type="primary" :icon="Upload" :loading="uploading" />

@@ -24,7 +24,8 @@ for (const [name, impl] of Object.entries(pdfGlobals)) {
 
 /**
  * 读取本地文档文件为纯文本（P2 解析增强）：
- * .docx → mammoth 提取正文；.pdf → pdf-parse 提取文本；其余按 utf-8 文本。
+ * .docx → mammoth 提取正文；.doc → word-extractor 提取正文；
+ * .pdf → pdf-parse 提取文本；其余按 utf-8 文本。
  */
 export async function readDocumentFile(filePath: string): Promise<string> {
   const ext = filePath.toLowerCase().split('.').pop();
@@ -32,6 +33,11 @@ export async function readDocumentFile(filePath: string): Promise<string> {
     const mammoth = await import('mammoth');
     const result = await mammoth.extractRawText({ path: filePath });
     return result.value;
+  }
+  if (ext === 'doc') {
+    const WordExtractor = (await import('word-extractor')).default;
+    const doc = await new WordExtractor().extract(filePath);
+    return doc.getBody();
   }
   if (ext === 'pdf') {
     const { PDFParse } = await import('pdf-parse');
@@ -48,7 +54,7 @@ export async function readDocumentFile(filePath: string): Promise<string> {
 
 /**
  * 解析上传文件的内存 buffer（P3 Web 后台 multipart 上传用）：
- * 按 .docx / .pdf / 纯文本 分流，与 readDocumentFile 同等解析能力。
+ * 按 .docx / .doc / .pdf / 纯文本 分流，与 readDocumentFile 同等解析能力。
  */
 export async function parseDocumentBuffer(filename: string, buffer: Buffer): Promise<string> {
   const ext = filename.toLowerCase().split('.').pop();
@@ -56,6 +62,11 @@ export async function parseDocumentBuffer(filename: string, buffer: Buffer): Pro
     const mammoth = await import('mammoth');
     const result = await mammoth.extractRawText({ buffer });
     return result.value;
+  }
+  if (ext === 'doc') {
+    const WordExtractor = (await import('word-extractor')).default;
+    const doc = await new WordExtractor().extract(buffer);
+    return doc.getBody();
   }
   if (ext === 'pdf') {
     const { PDFParse } = await import('pdf-parse');
